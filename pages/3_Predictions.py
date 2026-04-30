@@ -1,6 +1,6 @@
 """
 Attrition Prediction Page
-Uses trained model to predict employee attrition risk
+Using trained models to predict employee attrition risk
 """
 
 import streamlit as st
@@ -16,7 +16,7 @@ st.set_page_config(page_title="Predictions", layout="wide")
 
 @st.cache_resource
 def load_model_artifacts():
-    """Load trained model and preprocessing artifacts."""
+    """Loading trained model and preprocessing artifacts."""
     models_dir = Path("models")
 
     try:
@@ -26,10 +26,33 @@ def load_model_artifacts():
         le_dept = joblib.load(models_dir / "label_encoder_department.pkl")
         le_salary = joblib.load(models_dir / "label_encoder_salary.pkl")
 
+        # Loading advanced models
+        try:
+            xgb_model = joblib.load(models_dir / "xgboost_model.pkl")
+        except FileNotFoundError:
+            xgb_model = None
+
+        try:
+            lgb_model = joblib.load(models_dir / "lightgbm_model.pkl")
+        except FileNotFoundError:
+            lgb_model = None
+
         with open(models_dir / "feature_columns.json", "r") as f:
             feature_cols = json.load(f)
 
-        feature_importance = pd.read_csv(models_dir / "feature_importance.csv")
+        # Loading feature importance for each model
+        feature_importances = {}
+        for model_name in ["random_forest", "xgboost", "lightgbm"]:
+            try:
+                feature_importances[model_name] = pd.read_csv(
+                    models_dir / f"feature_importance_{model_name}.csv"
+                )
+            except FileNotFoundError:
+                pass
+
+        # Fallback to old format for RF only
+        if "random_forest" not in feature_importances:
+            feature_importances["random_forest"] = pd.read_csv(models_dir / "feature_importance.csv")
 
         with open(models_dir / "model_results.json", "r") as f:
             model_results = json.load(f)
@@ -37,11 +60,13 @@ def load_model_artifacts():
         return {
             "rf_model": rf_model,
             "lr_model": lr_model,
+            "xgb_model": xgb_model,
+            "lgb_model": lgb_model,
             "scaler": scaler,
             "le_dept": le_dept,
             "le_salary": le_salary,
             "feature_cols": feature_cols,
-            "feature_importance": feature_importance,
+            "feature_importances": feature_importances,
             "model_results": model_results,
         }
     except Exception as e:
@@ -53,24 +78,42 @@ st.title("Attrition Prediction")
 artifacts = load_model_artifacts()
 
 if artifacts is None:
-    st.warning("Please run the training script first: `python scripts/train_model.py`")
+    st.warning("Please run the training script first: `python scripts/train_advanced_models.py`")
     st.stop()
+
+# Building model options list
+model_options = ["Random Forest (Recommended)"]
+if artifacts.get("lr_model") is not None:
+    model_options.append("Logistic Regression")
+if artifacts.get("xgb_model") is not None:
+    model_options.append("XGBoost")
+if artifacts.get("lgb_model") is not None:
+    model_options.append("LightGBM")
 
 # Model selection
 col1, col2 = st.columns([2, 1])
 with col1:
     selected_model = st.selectbox(
         "Select Model",
-        ["Random Forest (Recommended)", "Logistic Regression"],
+        model_options,
         index=0
     )
 
-# Show model performance
+# Determining model key and loading metrics
+model_key_map = {
+    "Random Forest": "random_forest",
+    "Logistic Regression": "logistic_regression",
+    "XGBoost": "xgboost",
+    "LightGBM": "lightgbm"
+}
+
+# Showing model performance
 with col2:
-    model_key = "random_forest" if "Random Forest" in selected_model else "logistic_regression"
-    metrics = artifacts["model_results"][model_key]
-    st.metric("Accuracy", f"{metrics['accuracy']:.1%}")
-    st.metric("ROC AUC", f"{metrics['roc_auc']:.3f}")
+    model_key = model_key_map.get(selected_model.replace(" (Recommended)", ""), "random_forest")
+    if model_key in artifacts["model_results"]:
+        metrics = artifacts["model_results"][model_key]
+        st.metric("Accuracy", f"{metrics['accuracy']:.1%}")
+        st.metric("ROC AUC", f"{metrics['roc_auc']:.3f}")
 
 st.divider()
 
@@ -136,49 +179,54 @@ with col_input:
         submitted = st.form_submit_button("Predict Attrition Risk", width='stretch')
 
 with col_importance:
-    st.subheader("Feature Importance (Random Forest)")
-    fig_importance = px.bar(
-        artifacts["feature_importance"].head(5),
-        x="importance",
-        y="feature",
-        orientation="h",
-        title="Top 5 Predictive Features",
-        color="importance",
-        color_continuous_scale="Blues",
-    )
-    fig_importance.update_layout(showlegend=False, yaxis={"categoryorder": "total ascending"})
-    st.plotly_chart(fig_importance, width='stretch')
+    # Displaying feature importance for selected model
+    importance_key = model_key_map.get(selected_model.replace(" (Recommended)", ""), "random_forest")
+    if importance_key in artifacts["feature_importances"]:
+        st.subheader(f"Feature Importance ({selected_model.replace(' (Recommended)', '')})")
+        fig_importance = px.bar(
+            artifacts["feature_importances"][importance_key].head(5),
+            x="importance",
+            y="feature",
+            orientation="h",
+            title="Top 5 Predictive Features",
+            color="importance",
+            color_continuous_scale="Blues",
+        )
+        fig_importance.update_layout(showlegend=False, yaxis={"categoryorder": "total ascending"})
+        st.plotly_chart(fig_importance, width='stretch')
+        st.caption("These features have the strongest influence on attrition predictions.")
 
-    st.caption("These features have the strongest influence on attrition predictions.")
-
-# Handle prediction
+# Handling prediction
 if submitted:
-    # Encode categorical inputs
+    # Encoding categorical inputs
     dept_encoded = artifacts["le_dept"].transform([department])[0]
     salary_encoded = artifacts["le_salary"].transform([salary])[0]
 
-    # Create feature array
+    # Creating feature array
     features = np.array([[
         satisfaction, last_evaluation, num_projects, monthly_hours,
         tenure, work_accident, promotion, dept_encoded, salary_encoded
     ]])
 
-    # Get feature names order
-    feature_order = artifacts["feature_cols"]
-
-    # Select model
+    # Selecting model and getting prediction
     if "Random Forest" in selected_model:
         model = artifacts["rf_model"]
         proba = model.predict_proba(features)[0]
-    else:
+    elif "Logistic Regression" in selected_model:
         model = artifacts["lr_model"]
         features_scaled = artifacts["scaler"].transform(features)
         proba = model.predict_proba(features_scaled)[0]
+    elif "XGBoost" in selected_model:
+        model = artifacts["xgb_model"]
+        proba = model.predict_proba(features)[0]
+    elif "LightGBM" in selected_model:
+        model = artifacts["lgb_model"]
+        proba = model.predict_proba(features)[0]
 
     attrition_prob = proba[1] * 100
     stay_prob = proba[0] * 100
 
-    # Display results
+    # Displaying results
     st.divider()
     st.subheader("Prediction Result")
 
@@ -186,7 +234,6 @@ if submitted:
 
     with col_result1:
         risk_level = "High" if attrition_prob > 50 else "Medium" if attrition_prob > 20 else "Low"
-        risk_color = "(High)" if risk_level == "High" else "(Medium)" if risk_level == "Medium" else "(Low)"
 
         st.metric(
             "Attrition Risk",
@@ -264,18 +311,38 @@ with st.expander("About the Models"):
 
     with col1:
         st.markdown("""
-        **Random Forest (Recommended)**
-        - 98.3% accuracy, 99.15% ROC AUC
-        - Ensemble of 100 decision trees
-        - Handles non-linear relationships well
-        - Best for accurate predictions
-        """)
+            **Random Forest (Recommended)**
+            - 98.5% accuracy, 99.2% ROC AUC
+            - Ensemble of 100 decision trees
+            - Handles non-linear relationships well
+            - Best for accurate predictions
+            """)
+
+        if artifacts.get("xgb_model") is not None:
+            xgb_metrics = artifacts["model_results"].get("xgboost", {})
+            st.markdown(f"""
+                **XGBoost**
+                - {xgb_metrics.get('accuracy', 0):.1%} accuracy, {xgb_metrics.get('roc_auc', 0):.4f} ROC AUC
+                - Gradient boosting with trees
+                - Excellent performance on tabular data
+                - Fast training and prediction
+                """)
 
     with col2:
+        if artifacts.get("lgb_model") is not None:
+            lgb_metrics = artifacts["model_results"].get("lightgbm", {})
+            st.markdown(f"""
+                **LightGBM**
+                - {lgb_metrics.get('accuracy', 0):.1%} accuracy, {lgb_metrics.get('roc_auc', 0):.4f} ROC AUC
+                - Light gradient boosting
+                - Memory-efficient and fast
+                - Handles large datasets well
+                """)
+
         st.markdown("""
-        **Logistic Regression**
-        - 77.1% accuracy, 81.15% ROC AUC
-        - Linear model with interpretable coefficients
-        - Faster predictions
-        - Better for understanding feature impact
-        """)
+            **Logistic Regression**
+            - 77.1% accuracy, 81.2% ROC AUC
+            - Linear model with interpretable coefficients
+            - Faster predictions
+            - Better for understanding feature impact
+            """)
