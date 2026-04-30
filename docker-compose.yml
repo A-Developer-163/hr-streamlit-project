@@ -1,0 +1,73 @@
+# HR Employee Analytics - Docker Compose Configuration
+# Docker Compose v2 syntax
+
+services:
+  streamlit:
+    build:
+      context: .
+      target: production
+      cache_from:
+        - hr-analytics:latest
+    image: hr-analytics:latest
+    container_name: hr-analytics-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Mount data directory for live updates
+      - ./data:/app/data:ro
+      # Mount models directory
+      - ./models:/app/models:ro
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - hr-analytics-network
+
+  development:
+    build:
+      context: .
+      target: development
+    image: hr-analytics:dev
+    container_name: hr-analytics-dev
+    ports:
+      - "8502:8501"
+    volumes:
+      # Mount entire source for development
+      - .:/app
+      # Override with local data
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
+      - STREAMLIT_LOGGER_LEVEL=debug
+    command: ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--logger.level=debug"]
+    profiles:
+      - development
+    networks:
+      - hr-analytics-network
+
+networks:
+  hr-analytics-network:
+    name: hr-analytics-network
+    driver: bridge
+
+volumes:
+  hr-data:
+    name: hr-data
+  hr-models:
+    name: hr-models
