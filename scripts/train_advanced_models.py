@@ -2,6 +2,12 @@
 """
 Training Advanced Employee Attrition Prediction Models
 Training XGBoost and LightGBM models, comparing against Random Forest baseline.
+
+BIAS FIXES APPLIED:
+- Proper ordinal encoding for salary (low=0, medium=1, high=2)
+- OneHot encoding for Department (nominal variable)
+- Train/Val/Test split (70/15/15) to prevent test set leakage
+- Threshold tuning on validation set only
 """
 
 import pandas as pd
@@ -17,12 +23,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, precision_recall_curve
 
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+
+# Fairness analysis
+from fairlearn.metrics import (
+    MetricFrame,
+    demographic_parity_difference,
+    demographic_parity_ratio,
+    selection_rate
+)
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 
 def load_and_preprocess_data(csv_path: str = None):
@@ -44,36 +59,61 @@ def load_and_preprocess_data(csv_path: str = None):
 
 def train_models(df, X, y, feature_cols):
     """Training multiple models and comparing performance."""
-    # Splitting data first to prevent data leakage
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    # THREE-WAY SPLIT: 70% train, 15% validation, 15% test
+    # Validation set for threshold tuning (prevents test set leakage)
+    print("\nSplitting data: 70% train, 15% validation, 15% test")
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X, y, test_size=0.3, random_state=42, stratify=y
+    )
+    X_val, X_test, y_val, y_test = train_test_split(
+        X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
     )
 
-    # Getting the training and test indices for proper encoding
-    train_idx = X_train.index
-    test_idx = X_test.index
+    print(f"Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
-    # Converting string columns to object dtype for LabelEncoder compatibility
-    X_train["Department"] = X_train["Department"].astype(object)
-    X_test["Department"] = X_test["Department"].astype(object)
-    X_train["salary"] = X_train["salary"].astype(object)
-    X_test["salary"] = X_test["salary"].astype(object)
+    # PROPER ENCODING: Ordinal for salary, OneHot for Department
+    # Salary has natural order: low < medium < high
+    salary_categories = [['low', 'medium', 'high']]
+    salary_encoder = OrdinalEncoder(categories=salary_categories, dtype=int)
 
-    # Fitting encoders on training data only, then transforming both
-    le_department = LabelEncoder()
-    X_train.loc[:, "Department"] = le_department.fit_transform(X_train["Department"])
-    X_test.loc[:, "Department"] = le_department.transform(X_test["Department"])
+    # Department is nominal - use OneHotEncoder
+    department_encoder = OneHotEncoder(sparse_output=False, drop='first', dtype=int)
 
-    le_salary = LabelEncoder()
-    X_train.loc[:, "salary"] = le_salary.fit_transform(X_train["salary"])
-    X_test.loc[:, "salary"] = le_salary.transform(X_test["salary"])
+    # Fit encoders on training data only
+    X_train = X_train.copy()
+    X_val = X_val.copy()
+    X_test = X_test.copy()
 
-    # Encoding full X for cross-validation (same encoding as train/test)
+    X_train['salary'] = salary_encoder.fit_transform(X_train[['salary']])
+    X_val['salary'] = salary_encoder.transform(X_val[['salary']])
+    X_test['salary'] = salary_encoder.transform(X_test[['salary']])
+
+    # OneHot encode Department - FIT FIRST to get categories
+    X_train_dept = department_encoder.fit_transform(X_train[['Department']])
+    dept_columns = [f'Dept_{cat}' for cat in department_encoder.categories_[0][1:]]
+    X_val_dept = department_encoder.transform(X_val[['Department']])
+    X_test_dept = department_encoder.transform(X_test[['Department']])
+
+    # Add one-hot columns and drop original Department
+    for i, col in enumerate(dept_columns):
+        X_train[col] = X_train_dept[:, i]
+        X_val[col] = X_val_dept[:, i]
+        X_test[col] = X_test_dept[:, i]
+
+    X_train = X_train.drop('Department', axis=1)
+    X_val = X_val.drop('Department', axis=1)
+    X_test = X_test.drop('Department', axis=1)
+
+    # Update feature columns
+    feature_cols_encoded = [c for c in X_train.columns]
+
+    # Encode full X for cross-validation
     X_encoded = X.copy()
-    X_encoded["Department"] = X_encoded["Department"].astype(object)
-    X_encoded["salary"] = X_encoded["salary"].astype(object)
-    X_encoded.loc[:, "Department"] = le_department.transform(X_encoded["Department"])
-    X_encoded.loc[:, "salary"] = le_salary.transform(X_encoded["salary"])
+    X_encoded['salary'] = salary_encoder.transform(X_encoded[['salary']])
+    X_encoded_dept = department_encoder.transform(X_encoded[['Department']])
+    for i, col in enumerate(dept_columns):
+        X_encoded[col] = X_encoded_dept[:, i]
+    X_encoded = X_encoded.drop('Department', axis=1)
 
     # Calculating class weight for imbalance
     neg_count, pos_count = np.bincount(y_train)
@@ -96,23 +136,26 @@ def train_models(df, X, y, feature_cols):
         n_jobs=-1,
         class_weight='balanced'
     )
-    rf.fit(X_train, y_train)
+    rf.fit(X_train[feature_cols_encoded], y_train)
     training_times["random_forest"] = time.time() - start_time
 
-    rf_preds = rf.predict(X_test)
-    rf_proba = rf.predict_proba(X_test)[:, 1]
-
-    confusion_matrices["random_forest"] = confusion_matrix(y_test, rf_preds).tolist()
-    classification_reports["random_forest"] = classification_report(y_test, rf_preds, output_dict=True)
-
-    precisions, recalls, thresholds = precision_recall_curve(y_test, rf_proba)
+    # Use VALIDATION set for threshold tuning
+    rf_val_proba = rf.predict_proba(X_val[feature_cols_encoded])[:, 1]
+    precisions, recalls, thresholds = precision_recall_curve(y_val, rf_val_proba)
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
     optimal_idx = np.argmax(f1_scores)
     optimal_thresholds["random_forest"] = float(thresholds[optimal_idx])
 
+    # Evaluate on TEST set with optimal threshold
+    rf_test_proba = rf.predict_proba(X_test[feature_cols_encoded])[:, 1]
+    rf_preds = (rf_test_proba >= optimal_thresholds["random_forest"]).astype(int)
+
+    confusion_matrices["random_forest"] = confusion_matrix(y_test, rf_preds).tolist()
+    classification_reports["random_forest"] = classification_report(y_test, rf_preds, output_dict=True)
+
     results["random_forest"] = {
         "accuracy": float((rf_preds == y_test).mean()),
-        "roc_auc": float(roc_auc_score(y_test, rf_proba)),
+        "roc_auc": float(roc_auc_score(y_test, rf_test_proba)),
         "cv_scores": cross_val_score(rf, X_encoded, y, cv=5, scoring="roc_auc").tolist(),
         "optimal_threshold": optimal_thresholds["random_forest"]
     }
@@ -132,23 +175,26 @@ def train_models(df, X, y, feature_cols):
         eval_metric='logloss',
         n_jobs=-1
     )
-    xgb.fit(X_train, y_train)
+    xgb.fit(X_train[feature_cols_encoded], y_train)
     training_times["xgboost"] = time.time() - start_time
 
-    xgb_preds = xgb.predict(X_test)
-    xgb_proba = xgb.predict_proba(X_test)[:, 1]
-
-    confusion_matrices["xgboost"] = confusion_matrix(y_test, xgb_preds).tolist()
-    classification_reports["xgboost"] = classification_report(y_test, xgb_preds, output_dict=True)
-
-    precisions, recalls, thresholds = precision_recall_curve(y_test, xgb_proba)
+    # Use VALIDATION set for threshold tuning
+    xgb_val_proba = xgb.predict_proba(X_val[feature_cols_encoded])[:, 1]
+    precisions, recalls, thresholds = precision_recall_curve(y_val, xgb_val_proba)
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
     optimal_idx = np.argmax(f1_scores)
     optimal_thresholds["xgboost"] = float(thresholds[optimal_idx])
 
+    # Evaluate on TEST set with optimal threshold
+    xgb_test_proba = xgb.predict_proba(X_test[feature_cols_encoded])[:, 1]
+    xgb_preds = (xgb_test_proba >= optimal_thresholds["xgboost"]).astype(int)
+
+    confusion_matrices["xgboost"] = confusion_matrix(y_test, xgb_preds).tolist()
+    classification_reports["xgboost"] = classification_report(y_test, xgb_preds, output_dict=True)
+
     results["xgboost"] = {
         "accuracy": float((xgb_preds == y_test).mean()),
-        "roc_auc": float(roc_auc_score(y_test, xgb_proba)),
+        "roc_auc": float(roc_auc_score(y_test, xgb_test_proba)),
         "cv_scores": cross_val_score(xgb, X_encoded, y, cv=5, scoring="roc_auc").tolist(),
         "optimal_threshold": optimal_thresholds["xgboost"]
     }
@@ -167,30 +213,106 @@ def train_models(df, X, y, feature_cols):
         verbose=-1,
         n_jobs=-1
     )
-    lgb.fit(X_train, y_train)
+    lgb.fit(X_train[feature_cols_encoded], y_train)
     training_times["lightgbm"] = time.time() - start_time
 
-    lgb_preds = lgb.predict(X_test)
-    lgb_proba = lgb.predict_proba(X_test)[:, 1]
-
-    confusion_matrices["lightgbm"] = confusion_matrix(y_test, lgb_preds).tolist()
-    classification_reports["lightgbm"] = classification_report(y_test, lgb_preds, output_dict=True)
-
-    precisions, recalls, thresholds = precision_recall_curve(y_test, lgb_proba)
+    # Use VALIDATION set for threshold tuning
+    lgb_val_proba = lgb.predict_proba(X_val[feature_cols_encoded])[:, 1]
+    precisions, recalls, thresholds = precision_recall_curve(y_val, lgb_val_proba)
     f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-10)
     optimal_idx = np.argmax(f1_scores)
     optimal_thresholds["lightgbm"] = float(thresholds[optimal_idx])
 
+    # Evaluate on TEST set with optimal threshold
+    lgb_test_proba = lgb.predict_proba(X_test[feature_cols_encoded])[:, 1]
+    lgb_preds = (lgb_test_proba >= optimal_thresholds["lightgbm"]).astype(int)
+
+    confusion_matrices["lightgbm"] = confusion_matrix(y_test, lgb_preds).tolist()
+    classification_reports["lightgbm"] = classification_report(y_test, lgb_preds, output_dict=True)
+
     results["lightgbm"] = {
         "accuracy": float((lgb_preds == y_test).mean()),
-        "roc_auc": float(roc_auc_score(y_test, lgb_proba)),
+        "roc_auc": float(roc_auc_score(y_test, lgb_test_proba)),
         "cv_scores": cross_val_score(lgb, X_encoded, y, cv=5, scoring="roc_auc").tolist(),
         "optimal_threshold": optimal_thresholds["lightgbm"]
     }
 
     models["lightgbm"] = lgb
 
-    return models, results, confusion_matrices, classification_reports, optimal_thresholds, training_times, le_department, le_salary
+    return (models, results, confusion_matrices, classification_reports,
+            optimal_thresholds, training_times, salary_encoder, department_encoder,
+            feature_cols_encoded, X_test, y_test)
+
+
+def compute_fairness_metrics(y_true, y_pred, y_proba, sensitive_features, feature_name):
+    """Compute fairness metrics using fairlearn."""
+    metrics = {
+        'selection_rate': selection_rate,
+        'accuracy': accuracy_score,
+        'precision': precision_score,
+        'recall': recall_score,
+        'f1': f1_score
+    }
+
+    mf = MetricFrame(
+        metrics=metrics,
+        y_true=y_true,
+        y_pred=y_pred,
+        sensitive_features=sensitive_features
+    )
+
+    dp_diff = demographic_parity_difference(
+        y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
+    )
+    dp_ratio = demographic_parity_ratio(
+        y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
+    )
+
+    return {
+        'by_group': mf.by_group.to_dict(),
+        'overall': mf.overall.to_dict(),
+        'demographic_parity_difference': float(dp_diff),
+        'demographic_parity_ratio': float(dp_ratio),
+        'passes_80_percent_rule': bool(dp_ratio >= 0.8)
+    }
+
+
+def run_fairness_analysis(models, X_test, y_test, feature_cols_encoded):
+    """Run fairness analysis on all models."""
+    y_test_array = y_test.values if hasattr(y_test, 'values') else y_test
+
+    # Reconstruct sensitive features from X_test
+    salary_sensitive = X_test['salary'].map({0: 'low', 1: 'medium', 2: 'high'})
+
+    dept_columns = [c for c in X_test.columns if c.startswith('Dept_')]
+    dept_sensitive = 'unknown'
+    for col in dept_columns:
+        mask = X_test[col] == 1
+        dept_sensitive = np.where(mask, col.replace('Dept_', ''), dept_sensitive)
+
+    fairness_by_model = {}
+    for model_name, model in models.items():
+        y_proba = model.predict_proba(X_test)[:, 1]
+        y_pred = (y_proba >= 0.5).astype(int)
+
+        salary_fairness = compute_fairness_metrics(
+            y_test_array, y_pred, y_proba,
+            sensitive_features=salary_sensitive,
+            feature_name='salary'
+        )
+
+        dept_fairness = compute_fairness_metrics(
+            y_test_array, y_pred, y_proba,
+            sensitive_features=dept_sensitive,
+            feature_name='department'
+        )
+
+        fairness_by_model[model_name] = {
+            'by_salary': salary_fairness,
+            'by_department': dept_fairness
+        }
+
+    return fairness_by_model
 
 
 def extract_feature_importance(models, feature_cols):
@@ -207,7 +329,10 @@ def extract_feature_importance(models, feature_cols):
     return importances
 
 
-def save_artifacts(models, results, feature_importances, le_department, le_salary, feature_cols, confusion_matrices, classification_reports, optimal_thresholds, training_times):
+def save_artifacts(models, results, feature_importances, salary_encoder,
+                   department_encoder, feature_cols, confusion_matrices,
+                   classification_reports, optimal_thresholds, training_times,
+                   fairness_results=None):
     """Saving model artifacts for use in dashboard."""
     output_dir = Path(os.getenv("MODELS_DIR", "models"))
     output_dir.mkdir(exist_ok=True)
@@ -218,8 +343,8 @@ def save_artifacts(models, results, feature_importances, le_department, le_salar
     joblib.dump(models["lightgbm"], output_dir / "lightgbm_model.pkl")
 
     # Saving encoders
-    joblib.dump(le_department, output_dir / "label_encoder_department.pkl")
-    joblib.dump(le_salary, output_dir / "label_encoder_salary.pkl")
+    joblib.dump(salary_encoder, output_dir / "salary_encoder.pkl")
+    joblib.dump(department_encoder, output_dir / "department_encoder.pkl")
 
     # Saving feature names
     with open(output_dir / "feature_columns.json", "w") as f:
@@ -242,7 +367,10 @@ def save_artifacts(models, results, feature_importances, le_department, le_salar
         json_reports[model_name] = {}
         for key, value in report.items():
             if isinstance(value, dict):
-                json_reports[model_name][key] = {k: float(v) if isinstance(v, (np.integer, np.floating)) else v for k, v in value.items()}
+                json_reports[model_name][key] = {
+                    k: float(v) if isinstance(v, (np.integer, np.floating)) else v
+                    for k, v in value.items()
+                }
             else:
                 json_reports[model_name][key] = float(value) if isinstance(value, (np.integer, np.floating)) else value
 
@@ -269,6 +397,12 @@ def save_artifacts(models, results, feature_importances, le_department, le_salar
 
     pd.DataFrame(comparison_data).to_csv(output_dir / "model_comparison.csv", index=False)
 
+    # Save fairness report if available
+    if fairness_results:
+        with open(output_dir / "fairness_report.json", "w") as f:
+            json.dump(fairness_results, f, indent=2)
+        print(f"\nFairness report saved")
+
     print(f"\nModel artifacts saved to {output_dir}/")
 
 
@@ -286,6 +420,7 @@ def print_summary(results, feature_importances, training_times):
         print(f"  ROC AUC:        {metrics['roc_auc']:.4f}")
         print(f"  CV Scores:      {np.array(metrics['cv_scores']).mean():.4f} (+/- {np.array(metrics['cv_scores']).std() * 2:.4f})")
         print(f"  Training Time:  {training_times[model_name]:.2f}s")
+        print(f"  Opt Threshold:  {metrics['optimal_threshold']:.4f}")
 
     print("\n" + "=" * 70)
     print("FEATURE IMPORTANCE COMPARISON (Top 3)")
@@ -350,23 +485,36 @@ def main():
     print(f"Attrition rate: {y.mean() * 100:.1f}%")
 
     # Training models
-    models, results, confusion_matrices, classification_reports, optimal_thresholds, training_times, le_dept, le_salary = train_models(df, X, y, feature_cols)
+    (models, results, confusion_matrices, classification_reports,
+     optimal_thresholds, training_times, salary_enc, dept_enc,
+     feature_cols_encoded, X_test, y_test) = train_models(df, X, y, feature_cols)
 
     # Extracting feature importance
-    feature_importances = extract_feature_importance(models, feature_cols)
+    feature_importances = extract_feature_importance(models, feature_cols_encoded)
+
+    # Run fairness analysis
+    print("\nRunning fairness analysis...")
+    fairness_results = run_fairness_analysis(models, X_test, y_test, feature_cols_encoded)
+
+    # Print fairness summary
+    print("\n" + "=" * 70)
+    print("FAIRNESS SUMMARY (Random Forest)")
+    print("=" * 70)
+    salary_ratio = fairness_results['random_forest']['by_salary']['demographic_parity_ratio']
+    dept_ratio = fairness_results['random_forest']['by_department']['demographic_parity_ratio']
+    print(f"\nSalary Demographic Parity Ratio: {salary_ratio:.4f}")
+    print(f"  {'✓ Passes' if salary_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
+    print(f"\nDepartment Demographic Parity Ratio: {dept_ratio:.4f}")
+    print(f"  {'✓ Passes' if dept_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
 
     # Saving everything
-    save_artifacts(models, results, feature_importances, le_dept, le_salary, feature_cols, confusion_matrices, classification_reports, optimal_thresholds, training_times)
+    save_artifacts(models, results, feature_importances, salary_enc, dept_enc,
+                   feature_cols_encoded, confusion_matrices, classification_reports,
+                   optimal_thresholds, training_times, fairness_results)
 
     # Printing summaries
     print_summary(results, feature_importances, training_times)
     print_comparison_report(results)
-
-    print("\n" + "=" * 70)
-    print("Optimal Thresholds (Maximize F1 Score)")
-    print("=" * 70)
-    for model_name, threshold in optimal_thresholds.items():
-        print(f"{model_name.replace('_', ' ').title()}: {threshold:.4f}")
 
 
 if __name__ == "__main__":
