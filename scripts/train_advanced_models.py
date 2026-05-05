@@ -17,6 +17,7 @@ from pathlib import Path
 import json
 import time
 import os
+import argparse
 from dotenv import load_dotenv
 
 # Loading environment variables
@@ -29,15 +30,59 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 # Fairness analysis
 from fairlearn.metrics import (
     MetricFrame,
     demographic_parity_difference,
     demographic_parity_ratio,
-    selection_rate
+    selection_rate,
+    true_positive_rate,
+    false_positive_rate,
+    equalized_odds_difference
 )
+from fairlearn.postprocessing import ThresholdOptimizer
+from fairlearn.reductions import ExponentiatedGradient, EqualizedOdds
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+
+class Float64XGBoostWrapper(BaseEstimator, ClassifierMixin):
+    """Wrapper to ensure XGBoost outputs float64 predictions for fairlearn compatibility.
+
+    XGBoost internally uses float32, but fairlearn's ThresholdOptimizer and
+    ExponentiatedGradient expect float64 probabilities. This wrapper converts
+    predict_proba output to float64 while maintaining full sklearn compatibility.
+    """
+
+    def __init__(self, **kwargs):
+        """Initialize wrapper with XGBoost parameters."""
+        self.kwargs = kwargs
+        self.model = XGBClassifier(**kwargs)
+
+    def fit(self, X, y, **kwargs):
+        """Fit the underlying XGBoost model, accepting sample_weight and other sklearn params."""
+        self.model.fit(X, y, **kwargs)
+        return self
+
+    def predict(self, X):
+        """Return class predictions."""
+        return self.model.predict(X)
+
+    def predict_proba(self, X):
+        """Return class probabilities as float64 for fairlearn compatibility."""
+        proba = self.model.predict_proba(X)
+        return proba.astype('float64')
+
+    def get_params(self, deep=True):
+        """Get parameters for sklearn compatibility."""
+        return self.kwargs
+
+    def set_params(self, **params):
+        """Set parameters for sklearn compatibility."""
+        self.kwargs.update(params)
+        self.model = XGBClassifier(**self.kwargs)
+        return self
 
 
 def load_and_preprocess_data(csv_path: str = None):
@@ -46,10 +91,8 @@ def load_and_preprocess_data(csv_path: str = None):
         csv_path = os.getenv("HR_DATA_PATH", "data/hr_employee_data.csv")
     df = pd.read_csv(csv_path)
 
-    # Dropping Emp_Id (not predictive)
     df = df.drop("Emp_Id", axis=1)
 
-    # Feature columns
     feature_cols = [c for c in df.columns if c != "left"]
     X = df[feature_cols]
     y = df["left"]
@@ -126,7 +169,6 @@ def train_models(df, X, y, feature_cols):
     optimal_thresholds = {}
     training_times = {}
 
-    # Random Forest (Baseline)
     print("\nTraining Random Forest (Baseline)...")
     start_time = time.time()
     rf = RandomForestClassifier(
@@ -162,7 +204,6 @@ def train_models(df, X, y, feature_cols):
 
     models["random_forest"] = rf
 
-    # XGBoost
     print("\nTraining XGBoost...")
     start_time = time.time()
     xgb = XGBClassifier(
@@ -201,7 +242,6 @@ def train_models(df, X, y, feature_cols):
 
     models["xgboost"] = xgb
 
-    # LightGBM
     print("\nTraining LightGBM...")
     start_time = time.time()
     lgb = LGBMClassifier(
@@ -241,17 +281,19 @@ def train_models(df, X, y, feature_cols):
 
     return (models, results, confusion_matrices, classification_reports,
             optimal_thresholds, training_times, salary_encoder, department_encoder,
-            feature_cols_encoded, X_test, y_test)
+            feature_cols_encoded, X_train, X_val, X_test, y_train, y_val, y_test)
 
 
 def compute_fairness_metrics(y_true, y_pred, y_proba, sensitive_features, feature_name):
-    """Compute fairness metrics using fairlearn."""
+    """Computing fairness metrics using fairlearn."""
     metrics = {
         'selection_rate': selection_rate,
         'accuracy': accuracy_score,
         'precision': precision_score,
         'recall': recall_score,
-        'f1': f1_score
+        'f1': f1_score,
+        'true_positive_rate': true_positive_rate,
+        'false_positive_rate': false_positive_rate
     }
 
     mf = MetricFrame(
@@ -268,17 +310,148 @@ def compute_fairness_metrics(y_true, y_pred, y_proba, sensitive_features, featur
         y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
     )
 
+    eod_diff = equalized_odds_difference(
+        y_true=y_true, y_pred=y_pred, sensitive_features=sensitive_features
+    )
+
     return {
         'by_group': mf.by_group.to_dict(),
         'overall': mf.overall.to_dict(),
         'demographic_parity_difference': float(dp_diff),
         'demographic_parity_ratio': float(dp_ratio),
-        'passes_80_percent_rule': bool(dp_ratio >= 0.8)
+        'passes_80_percent_rule': bool(dp_ratio >= 0.8),
+        'equalized_odds_difference': float(eod_diff)
+    }
+
+
+def apply_threshold_optimizer(base_model, X_train, y_train, sensitive_features, prefit=True):
+    """
+    Applying post-processing mitigation using ThresholdOptimizer with equalized odds.
+
+    Args:
+        base_model: Pre-trained model to mitigate
+        X_train: Training features
+        y_train: Training labels
+        sensitive_features: Sensitive attribute values for training data
+        prefit: Whether base_model is already fitted (default: True)
+
+    Returns:
+        ThresholdOptimizer: Fitted mitigated model
+    """
+    print("\nApplying ThresholdOptimizer (equalized odds constraint)...")
+    to = ThresholdOptimizer(
+        estimator=base_model,
+        constraints="equalized_odds",
+        prefit=prefit
+    )
+    to.fit(X_train, y_train, sensitive_features=sensitive_features)
+    print("  ThresholdOptimizer fitted successfully")
+    return to
+
+
+def apply_exponentiated_gradient(X_train, y_train, sensitive_features, estimator=None, eps=0.01):
+    """
+    Applying in-training mitigation using ExponentiatedGradient with equalized odds.
+
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        sensitive_features: Sensitive attribute values for training data
+        estimator: Base estimator (default: LightGBM)
+        eps: Tolerance for constraint violation (default: 0.01)
+
+    Returns:
+        ExponentiatedGradient: Fitted mitigated model
+    """
+    print("\nApplying ExponentiatedGradient (equalized odds constraint)...")
+    if estimator is None:
+        estimator = LGBMClassifier(
+            n_estimators=100,
+            max_depth=6,
+            learning_rate=0.1,
+            class_weight='balanced',
+            random_state=42,
+            verbose=-1,
+            n_jobs=-1
+        )
+
+    constraint = EqualizedOdds()
+    mitigated = ExponentiatedGradient(estimator, constraint, eps=eps)
+    mitigated.fit(X_train, y_train, sensitive_features=sensitive_features)
+    print("  ExponentiatedGradient fitted successfully")
+    return mitigated
+
+
+def evaluate_mitigated_model(mitigated_model, X_test, y_test, sensitive_features,
+                             model_name="mitigated"):
+    """
+    Evaluating a mitigated model and computing fairness metrics.
+
+    Args:
+        mitigated_model: Fitted mitigated model
+        X_test: Test features
+        y_test: Test labels
+        sensitive_features: Sensitive attribute values for test data
+        model_name: Name of the model for reporting
+
+    Returns:
+        dict: Results including predictions, metrics, and fairness
+    """
+    y_test_array = y_test.values if hasattr(y_test, 'values') else y_test
+
+    # Get predictions - ThresholdOptimizer requires sensitive_features
+    # ExponentiatedGradient also requires sensitive_features
+    try:
+        y_pred = mitigated_model.predict(X_test, sensitive_features=sensitive_features)
+    except TypeError:
+        # Fallback for models that don't require sensitive_features
+        y_pred = mitigated_model.predict(X_test)
+
+    # Get probabilities based on model type
+    if hasattr(mitigated_model, '_pmf_predict'):
+        # ThresholdOptimizer
+        try:
+            pmf = mitigated_model._pmf_predict(X_test, sensitive_features=sensitive_features)
+            y_proba = pmf[:, 1]  # Probability of positive class
+        except TypeError:
+            pmf = mitigated_model._pmf_predict(X_test)
+            y_proba = pmf[:, 1]
+    elif hasattr(mitigated_model, 'predict_proba'):
+        # ExponentiatedGradient and others
+        try:
+            y_proba = mitigated_model.predict_proba(X_test, sensitive_features=sensitive_features)[:, 1]
+        except TypeError:
+            y_proba = mitigated_model.predict_proba(X_test)[:, 1]
+    else:
+        y_proba = y_pred.astype(float)
+
+    # Compute standard metrics
+    accuracy = accuracy_score(y_test_array, y_pred)
+    precision = precision_score(y_test_array, y_pred, zero_division=0)
+    recall = recall_score(y_test_array, y_pred, zero_division=0)
+    f1 = f1_score(y_test_array, y_pred, zero_division=0)
+
+    # Compute fairness metrics
+    fairness = compute_fairness_metrics(
+        y_test_array, y_pred, y_proba,
+        sensitive_features=sensitive_features,
+        feature_name='group'
+    )
+
+    return {
+        'model_name': model_name,
+        'predictions': y_pred,
+        'probabilities': y_proba,
+        'accuracy': float(accuracy),
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'fairness': fairness
     }
 
 
 def run_fairness_analysis(models, X_test, y_test, feature_cols_encoded):
-    """Run fairness analysis on all models."""
+    """Running fairness analysis on all models."""
     y_test_array = y_test.values if hasattr(y_test, 'values') else y_test
 
     # Reconstruct sensitive features from X_test
@@ -315,6 +488,89 @@ def run_fairness_analysis(models, X_test, y_test, feature_cols_encoded):
     return fairness_by_model
 
 
+def run_mitigation_analysis(base_model, X_train, y_train, X_test, y_test,
+                            salary_sensitive_train, salary_sensitive_test,
+                            dept_sensitive_train, dept_sensitive_test,
+                            feature_cols_encoded, model_name="base", is_xgboost=False):
+    """
+    Running mitigation analysis using ThresholdOptimizer and ExponentiatedGradient.
+
+    Args:
+        base_model: Pre-trained baseline model
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        salary_sensitive_train, salary_sensitive_test: Salary sensitive features
+        dept_sensitive_train, dept_sensitive_test: Department sensitive features
+        feature_cols_encoded: List of encoded feature columns
+        model_name: Name of the base model
+
+    Returns:
+        dict: Mitigation results for both techniques
+    """
+    print(f"\n{'='*70}")
+    print(f"MITIGATION ANALYSIS FOR {model_name.upper()}")
+    print('='*70)
+
+    results = {}
+
+    # Wrap XGBoost models for fairlearn compatibility
+    if is_xgboost:
+        # Get XGBoost parameters from the base model
+        xgb_params = base_model.get_params()
+        # Create wrapped version with same parameters
+        wrapped_model = Float64XGBoostWrapper(**xgb_params)
+        # Fit the wrapper on the same data
+        wrapped_model.fit(X_train[feature_cols_encoded].values, y_train)
+        base_model = wrapped_model
+        print("Using Float64XGBoostWrapper for fairlearn compatibility")
+
+    def get_values(obj):
+        if hasattr(obj, 'values'):
+            return obj.values
+        return obj
+
+    # 1. ThresholdOptimizer with salary constraint
+    print("\n--- ThresholdOptimizer (Salary Equalized Odds) ---")
+    to_salary = apply_threshold_optimizer(
+        base_model, X_train[feature_cols_encoded].values,
+        get_values(y_train), get_values(salary_sensitive_train)
+    )
+    to_salary_results = evaluate_mitigated_model(
+        to_salary, X_test[feature_cols_encoded].values,
+        get_values(y_test), get_values(salary_sensitive_test),
+        model_name=f"{model_name}_to_salary"
+    )
+    results['threshold_optimizer_salary'] = to_salary_results
+
+    # 2. ThresholdOptimizer with department constraint
+    print("\n--- ThresholdOptimizer (Department Equalized Odds) ---")
+    to_dept = apply_threshold_optimizer(
+        base_model, X_train[feature_cols_encoded].values,
+        get_values(y_train), get_values(dept_sensitive_train)
+    )
+    to_dept_results = evaluate_mitigated_model(
+        to_dept, X_test[feature_cols_encoded].values,
+        get_values(y_test), get_values(dept_sensitive_test),
+        model_name=f"{model_name}_to_dept"
+    )
+    results['threshold_optimizer_dept'] = to_dept_results
+
+    # 3. ExponentiatedGradient with salary constraint
+    print("\n--- ExponentiatedGradient (Salary Equalized Odds) ---")
+    eg_salary = apply_exponentiated_gradient(
+        X_train[feature_cols_encoded].values,
+        get_values(y_train), get_values(salary_sensitive_train)
+    )
+    eg_salary_results = evaluate_mitigated_model(
+        eg_salary, X_test[feature_cols_encoded].values,
+        get_values(y_test), get_values(salary_sensitive_test),
+        model_name=f"{model_name}_eg_salary"
+    )
+    results['exponentiated_gradient_salary'] = eg_salary_results
+
+    return results
+
+
 def extract_feature_importance(models, feature_cols):
     """Extracting and formatting feature importance from all models."""
     importances = {}
@@ -332,36 +588,31 @@ def extract_feature_importance(models, feature_cols):
 def save_artifacts(models, results, feature_importances, salary_encoder,
                    department_encoder, feature_cols, confusion_matrices,
                    classification_reports, optimal_thresholds, training_times,
-                   fairness_results=None):
+                   fairness_results=None, mitigated_models=None,
+                   mitigation_results=None):
     """Saving model artifacts for use in dashboard."""
     output_dir = Path(os.getenv("MODELS_DIR", "models"))
     output_dir.mkdir(exist_ok=True)
 
-    # Saving models
     joblib.dump(models["random_forest"], output_dir / "random_forest_model.pkl")
     joblib.dump(models["xgboost"], output_dir / "xgboost_model.pkl")
     joblib.dump(models["lightgbm"], output_dir / "lightgbm_model.pkl")
 
-    # Saving encoders
     joblib.dump(salary_encoder, output_dir / "salary_encoder.pkl")
     joblib.dump(department_encoder, output_dir / "department_encoder.pkl")
 
-    # Saving feature names
     with open(output_dir / "feature_columns.json", "w") as f:
         json.dump(feature_cols, f)
 
-    # Saving results with training times
     for model_name in results:
         results[model_name]["training_time"] = training_times[model_name]
 
     with open(output_dir / "model_results.json", "w") as f:
         json.dump(results, f, indent=2)
 
-    # Saving confusion matrices
     with open(output_dir / "confusion_matrix.json", "w") as f:
         json.dump(confusion_matrices, f, indent=2)
 
-    # Saving classification reports
     json_reports = {}
     for model_name, report in classification_reports.items():
         json_reports[model_name] = {}
@@ -377,15 +628,12 @@ def save_artifacts(models, results, feature_importances, salary_encoder,
     with open(output_dir / "classification_report.json", "w") as f:
         json.dump(json_reports, f, indent=2)
 
-    # Saving optimal thresholds
     with open(output_dir / "optimal_threshold.json", "w") as f:
         json.dump(optimal_thresholds, f, indent=2)
 
-    # Saving feature importance for all models
     for name, importance_df in feature_importances.items():
         importance_df.to_csv(output_dir / f"feature_importance_{name}.csv", index=False)
 
-    # Saving combined comparison
     comparison_data = []
     for name, importance_df in feature_importances.items():
         top_features = importance_df.head(3)
@@ -397,11 +645,36 @@ def save_artifacts(models, results, feature_importances, salary_encoder,
 
     pd.DataFrame(comparison_data).to_csv(output_dir / "model_comparison.csv", index=False)
 
-    # Save fairness report if available
     if fairness_results:
         with open(output_dir / "fairness_report.json", "w") as f:
             json.dump(fairness_results, f, indent=2)
         print(f"\nFairness report saved")
+
+    if mitigated_models:
+        mitigation_dir = output_dir / "mitigated"
+        mitigation_dir.mkdir(exist_ok=True)
+        for model_name, model in mitigated_models.items():
+            joblib.dump(model, mitigation_dir / f"{model_name}.pkl")
+        print(f"Mitigated models saved to {mitigation_dir}/")
+
+    if mitigation_results:
+        def convert_mitigation(obj):
+            if isinstance(obj, dict):
+                return {k: convert_mitigation(v) for k, v in obj.items()}
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return float(obj)
+            elif isinstance(obj, pd.DataFrame):
+                return obj.to_dict()
+            elif pd.isna(obj):
+                return None
+            return obj
+
+        converted_results = convert_mitigation(mitigation_results)
+        with open(output_dir / "mitigation_report.json", "w") as f:
+            json.dump(converted_results, f, indent=2)
+        print(f"Mitigation report saved")
 
     print(f"\nModel artifacts saved to {output_dir}/")
 
@@ -473,9 +746,16 @@ def print_comparison_report(results):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Train advanced ML models with optional fairness mitigation')
+    parser.add_argument('--mitigate', action='store_true',
+                        help='Apply fairness mitigation techniques (Equalized Odds)')
+    args = parser.parse_args()
+
     print("=" * 70)
     print("ADVANCED EMPLOYEE ATTRITION PREDICTION MODELS")
     print("XGBoost & LightGBM vs Random Forest Baseline")
+    if args.mitigate:
+        print("WITH EQUALIZED ODDS MITIGATION")
     print("=" * 70)
 
     # Loading data
@@ -487,7 +767,7 @@ def main():
     # Training models
     (models, results, confusion_matrices, classification_reports,
      optimal_thresholds, training_times, salary_enc, dept_enc,
-     feature_cols_encoded, X_test, y_test) = train_models(df, X, y, feature_cols)
+     feature_cols_encoded, X_train, X_val, X_test, y_train, y_val, y_test) = train_models(df, X, y, feature_cols)
 
     # Extracting feature importance
     feature_importances = extract_feature_importance(models, feature_cols_encoded)
@@ -498,19 +778,93 @@ def main():
 
     # Print fairness summary
     print("\n" + "=" * 70)
-    print("FAIRNESS SUMMARY (Random Forest)")
+    print("BASELINE FAIRNESS SUMMARY")
     print("=" * 70)
     salary_ratio = fairness_results['random_forest']['by_salary']['demographic_parity_ratio']
     dept_ratio = fairness_results['random_forest']['by_department']['demographic_parity_ratio']
+    eod_salary = fairness_results['random_forest']['by_salary'].get('equalized_odds_difference', 0)
+    eod_dept = fairness_results['random_forest']['by_department'].get('equalized_odds_difference', 0)
+
     print(f"\nSalary Demographic Parity Ratio: {salary_ratio:.4f}")
     print(f"  {'✓ Passes' if salary_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
+    print(f"  Equalized Odds Difference: {eod_salary:.4f}")
     print(f"\nDepartment Demographic Parity Ratio: {dept_ratio:.4f}")
     print(f"  {'✓ Passes' if dept_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
+    print(f"  Equalized Odds Difference: {eod_dept:.4f}")
+
+    # Run mitigation if requested
+    mitigated_models = {}
+    mitigation_results = {}
+
+    if args.mitigate:
+        print("\n" + "=" * 70)
+        print("RUNNING FAIRNESS MITIGATION")
+        print("=" * 70)
+
+        # Create sensitive features from encoded data
+        salary_sensitive_train = X_train['salary'].map({0: 'low', 1: 'medium', 2: 'high'})
+        salary_sensitive_test = X_test['salary'].map({0: 'low', 1: 'medium', 2: 'high'})
+
+        dept_columns = [c for c in X_test.columns if c.startswith('Dept_')]
+        dept_sensitive_train = 'unknown'
+        for col in dept_columns:
+            mask = X_train[col] == 1
+            dept_sensitive_train = np.where(mask, col.replace('Dept_', ''), dept_sensitive_train)
+        dept_sensitive_test = 'unknown'
+        for col in dept_columns:
+            mask = X_test[col] == 1
+            dept_sensitive_test = np.where(mask, col.replace('Dept_', ''), dept_sensitive_test)
+
+        # Applying Equalized Odds mitigation to both XGBoost and LightGBM
+        mitigation_results = {}
+
+        for model_name in ["xgboost", "lightgbm"]:
+            base_model = models[model_name]
+            print(f"\n{'='*70}")
+            print(f"Processing {model_name.upper()} for Equalized Odds mitigation")
+            print('='*70)
+
+            model_mitigation = run_mitigation_analysis(
+                base_model, X_train, y_train, X_test, y_test,
+                salary_sensitive_train, salary_sensitive_test,
+                dept_sensitive_train, dept_sensitive_test,
+                feature_cols_encoded, model_name, is_xgboost=(model_name == "xgboost")
+            )
+            mitigation_results[model_name] = model_mitigation
+
+            # Collect mitigated models for saving
+            for key, result in model_mitigation.items():
+                mitigated_models[f"{model_name}_{key}"] = result['predictions']
+
+        # Print mitigation summary
+        print("\n" + "=" * 70)
+        print("MITIGATION RESULTS SUMMARY")
+        print("=" * 70)
+
+        for model_name in ["xgboost", "lightgbm"]:
+            baseline_acc = results[model_name]['accuracy']
+            baseline_eod = fairness_results[model_name]['by_salary'].get('equalized_odds_difference', 0)
+
+            print(f"\nBaseline {model_name.upper()}:")
+            print(f"  Accuracy: {baseline_acc:.4f}")
+            print(f"  Equalized Odds Difference: {baseline_eod:.4f}")
+
+            for tech_name, tech_results in mitigation_results[model_name].items():
+                acc = tech_results['accuracy']
+                eod = tech_results['fairness']['equalized_odds_difference']
+                acc_delta = acc - baseline_acc
+                eod_delta = eod - baseline_eod
+
+                print(f"\n{tech_name.upper().replace('_', ' ')}:")
+                print(f"  Accuracy: {acc:.4f} ({acc_delta:+.4f})")
+                print(f"  Equalized Odds Difference: {eod:.4f} ({eod_delta:+.4f})")
 
     # Saving everything
     save_artifacts(models, results, feature_importances, salary_enc, dept_enc,
                    feature_cols_encoded, confusion_matrices, classification_reports,
-                   optimal_thresholds, training_times, fairness_results)
+                   optimal_thresholds, training_times, fairness_results,
+                   mitigated_models if args.mitigate else None,
+                   mitigation_results if args.mitigate else None)
 
     # Printing summaries
     print_summary(results, feature_importances, training_times)
