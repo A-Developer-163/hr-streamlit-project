@@ -5,27 +5,15 @@ Department Analysis Page
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from config import HR_DATA_PATH
+from session_utils import get_hr_data
 
 st.set_page_config(page_title="Department Analysis", layout="wide")
 
-@st.cache_data
-def load_data():
-    """Load HR employee data from CSV."""
-    try:
-        df = pd.read_csv(HR_DATA_PATH)
-        for col in df.select_dtypes(include=["object", "string"]).columns:
-            df[col] = df[col].astype("category")
-        return df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
-
 st.title("Department Analysis")
 
-df = load_data()
+df = get_hr_data()
 
-if not df.empty:
+if df is not None and not df.empty:
     # Department selector
     selected_dept = st.selectbox(
         "Select Department",

@@ -1,0 +1,36 @@
+{
+  "lightgbm": {
+    "Baseline": {
+      "Accuracy": 0.9746666666666667,
+      "Eq Odds Diff": 0.054313099041533586,
+      "DP Ratio": 0.1638789701183988
+    },
+    "ThresholdOptimizer": {
+      "Accuracy": 0.9755555555555555,
+      "Eq Odds Diff": 0.054313099041533586,
+      "DP Ratio": 0.16546489563567363
+    },
+    "ExponentiatedGradient": {
+      "Accuracy": 0.9764444444444444,
+      "Eq Odds Diff": 0.057507987220447254,
+      "DP Ratio": 0.1885813148788927
+    }
+  },
+  "xgboost": {
+    "Baseline": {
+      "Accuracy": 0.98,
+      "Eq Odds Diff": 0.06709265175718848,
+      "DP Ratio": 0.1715522329333071
+    },
+    "ThresholdOptimizer": {
+      "Accuracy": 0.9764444444444444,
+      "Eq Odds Diff": 0.060702875399361034,
+      "DP Ratio": 0.1698480716790027
+    },
+    "ExponentiatedGradient": {
+      "Accuracy": 0.9804444444444445,
+      "Eq Odds Diff": 0.06709265175718848,
+      "DP Ratio": 0.17212791156731147
+    }
+  }
+}

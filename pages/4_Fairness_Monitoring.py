@@ -10,6 +10,7 @@ from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+from config import MODELS_DIR
 
 st.set_page_config(page_title="Fairness Monitoring", layout="wide")
 
@@ -25,7 +26,7 @@ DEFAULT_THRESHOLDS = {
 @st.cache_data(ttl=300)
 def load_fairness_data():
     """Loading fairness metrics from JSON reports."""
-    models_dir = Path("models")
+    models_dir = MODELS_DIR
 
     data = {
         "fairness_report": {},
@@ -37,33 +38,22 @@ def load_fairness_data():
     }
 
     try:
-        # Load fairness report
-        try:
-            with open(models_dir / "fairness_report.json", "r") as f:
-                data["fairness_report"] = json.load(f)
-        except FileNotFoundError:
-            data["error"] = "fairness_report.json not found. Run training with fairness analysis."
+        # Load all JSON files efficiently
+        json_files = {
+            "fairness_report.json": "fairness_report",
+            "mitigation_comparison.json": "mitigation_comparison",
+            "mitigation_report.json": "mitigation_report",
+            "model_results.json": "model_results"
+        }
 
-        # Load mitigation comparison
-        try:
-            with open(models_dir / "mitigation_comparison.json", "r") as f:
-                data["mitigation_comparison"] = json.load(f)
-        except FileNotFoundError:
-            pass  # Not critical if mitigation hasn't been run
-
-        # Load mitigation report
-        try:
-            with open(models_dir / "mitigation_report.json", "r") as f:
-                data["mitigation_report"] = json.load(f)
-        except FileNotFoundError:
-            pass  # Not critical if mitigation hasn't been run
-
-        # Load model results for accuracy
-        try:
-            with open(models_dir / "model_results.json", "r") as f:
-                data["model_results"] = json.load(f)
-        except FileNotFoundError:
-            data["error"] = "model_results.json not found. Run training script first."
+        for filename, key in json_files.items():
+            file_path = models_dir / filename
+            try:
+                with open(file_path, "r") as f:
+                    data[key] = json.load(f)
+            except FileNotFoundError:
+                if key in ["fairness_report", "model_results"]:
+                    data["error"] = f"{filename} not found. Run training script first."
 
         data["loaded"] = bool(data["fairness_report"] or data["mitigation_comparison"])
 
@@ -76,7 +66,7 @@ def load_fairness_data():
 @st.cache_data(ttl=300)
 def load_thresholds():
     """Loading fairness thresholds from config file."""
-    models_dir = Path("models")
+    models_dir = MODELS_DIR
     thresholds_path = models_dir / "fairness_thresholds.json"
 
     if thresholds_path.exists():
@@ -91,7 +81,7 @@ def load_thresholds():
 
 def save_thresholds(thresholds):
     """Saving thresholds to config file."""
-    models_dir = Path("models")
+    models_dir = MODELS_DIR
     thresholds_path = models_dir / "fairness_thresholds.json"
 
     try:
@@ -178,8 +168,9 @@ def get_key_metrics(fairness_data, thresholds):
 st.title("Fairness Monitoring Dashboard")
 st.markdown("Monitoring model fairness across salary levels and departments")
 
-# Load data
-fairness_data = load_fairness_data()
+# Load data with spinner
+with st.spinner("Loading fairness metrics..."):
+    fairness_data = load_fairness_data()
 
 if not fairness_data["loaded"]:
     st.error(f"**No fairness data found**\n\n{fairness_data['error']}")

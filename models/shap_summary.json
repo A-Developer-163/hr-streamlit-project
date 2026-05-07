@@ -1,0 +1,57 @@
+{
+  "n_samples": 50,
+  "n_features": 17,
+  "top_features": [
+    {
+      "feature": "satisfaction_level",
+      "mean_abs_shap": 0.1392896748539472,
+      "rank": 1
+    },
+    {
+      "feature": "number_project",
+      "mean_abs_shap": 0.10051808810977138,
+      "rank": 2
+    },
+    {
+      "feature": "time_spend_company",
+      "mean_abs_shap": 0.09917230554636378,
+      "rank": 3
+    },
+    {
+      "feature": "last_evaluation",
+      "mean_abs_shap": 0.06939807115481395,
+      "rank": 4
+    },
+    {
+      "feature": "average_montly_hours",
+      "mean_abs_shap": 0.06377486706654555,
+      "rank": 5
+    },
+    {
+      "feature": "Work_accident",
+      "mean_abs_shap": 0.010730967450813533,
+      "rank": 6
+    },
+    {
+      "feature": "salary",
+      "mean_abs_shap": 0.009944499438020943,
+      "rank": 7
+    },
+    {
+      "feature": "Dept_technical",
+      "mean_abs_shap": 0.0036693401240170975,
+      "rank": 8
+    },
+    {
+      "feature": "Dept_sales",
+      "mean_abs_shap": 0.001774007839518722,
+      "rank": 9
+    },
+    {
+      "feature": "Dept_support",
+      "mean_abs_shap": 0.0015189222640506336,
+      "rank": 10
+    }
+  ],
+  "total_shap_sum": 0.5037081175752158
+}

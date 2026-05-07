@@ -8,86 +8,98 @@ import pandas as pd
 import numpy as np
 import joblib
 import json
-from pathlib import Path
 import plotly.graph_objects as go
 import plotly.express as px
+from config import MODELS_DIR
 
 st.set_page_config(page_title="Predictions", layout="wide")
 
+
 @st.cache_resource
-def load_model_artifacts():
-    """Loading trained model and preprocessing artifacts."""
-    models_dir = Path("models")
+def load_preprocessing_artifacts():
+    """Loading preprocessing artifacts (encoders, scalers, feature columns)."""
+    models_dir = MODELS_DIR
 
     try:
-        rf_model = joblib.load(models_dir / "random_forest_model.pkl")
-        lr_model = joblib.load(models_dir / "logistic_regression_model.pkl")
         scaler = joblib.load(models_dir / "scaler.pkl")
-        le_dept = joblib.load(models_dir / "label_encoder_department.pkl")
-        le_salary = joblib.load(models_dir / "label_encoder_salary.pkl")
-
-        # Loading advanced models
-        try:
-            xgb_model = joblib.load(models_dir / "xgboost_model.pkl")
-        except FileNotFoundError:
-            xgb_model = None
-
-        try:
-            lgb_model = joblib.load(models_dir / "lightgbm_model.pkl")
-        except FileNotFoundError:
-            lgb_model = None
+        le_dept = joblib.load(models_dir / "department_encoder.pkl")
+        le_salary = joblib.load(models_dir / "salary_encoder.pkl")
 
         with open(models_dir / "feature_columns.json", "r") as f:
             feature_cols = json.load(f)
 
-        # Loading feature importance for each model
-        feature_importances = {}
-        for model_name in ["random_forest", "xgboost", "lightgbm"]:
-            try:
-                feature_importances[model_name] = pd.read_csv(
-                    models_dir / f"feature_importance_{model_name}.csv"
-                )
-            except FileNotFoundError:
-                pass
-
-        # Fallback to old format for RF only
-        if "random_forest" not in feature_importances:
-            feature_importances["random_forest"] = pd.read_csv(models_dir / "feature_importance.csv")
-
-        with open(models_dir / "model_results.json", "r") as f:
-            model_results = json.load(f)
-
         return {
-            "rf_model": rf_model,
-            "lr_model": lr_model,
-            "xgb_model": xgb_model,
-            "lgb_model": lgb_model,
             "scaler": scaler,
             "le_dept": le_dept,
             "le_salary": le_salary,
             "feature_cols": feature_cols,
-            "feature_importances": feature_importances,
-            "model_results": model_results,
         }
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        st.error(f"Error loading preprocessing artifacts: {e}")
         return None
+
+
+@st.cache_resource
+def load_model(model_name):
+    """Loading a single model on-demand."""
+    models_dir = MODELS_DIR
+
+    with st.spinner(f"Loading {model_name} model..."):
+        try:
+            if model_name == "random_forest":
+                return joblib.load(models_dir / "random_forest_model.pkl")
+            elif model_name == "logistic_regression":
+                return joblib.load(models_dir / "lr_attrition_model.pkl")
+            elif model_name == "xgboost":
+                return joblib.load(models_dir / "xgboost_model.pkl")
+            elif model_name == "lightgbm":
+                return joblib.load(models_dir / "lightgbm_model.pkl")
+        except FileNotFoundError:
+            return None
+
+
+@st.cache_data
+def load_model_results():
+    """Loading model performance metrics."""
+    models_dir = MODELS_DIR
+
+    try:
+        with open(models_dir / "model_results.json", "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@st.cache_data
+def load_feature_importance(model_name):
+    """Loading feature importance for a specific model."""
+    models_dir = MODELS_DIR
+
+    try:
+        return pd.read_csv(models_dir / f"feature_importance_{model_name}.csv")
+    except FileNotFoundError:
+        return None
+
 
 st.title("Attrition Prediction")
 
-artifacts = load_model_artifacts()
+# Load preprocessing artifacts
+preprocessing = load_preprocessing_artifacts()
 
-if artifacts is None:
+if preprocessing is None:
     st.warning("Please run the training script first: `python scripts/train_advanced_models.py`")
     st.stop()
 
+# Load model results
+model_results = load_model_results()
+
 # Building model options list
 model_options = ["Random Forest (Recommended)"]
-if artifacts.get("lr_model") is not None:
+if "logistic_regression" in model_results:
     model_options.append("Logistic Regression")
-if artifacts.get("xgb_model") is not None:
+if "xgboost" in model_results:
     model_options.append("XGBoost")
-if artifacts.get("lgb_model") is not None:
+if "lightgbm" in model_results:
     model_options.append("LightGBM")
 
 # Model selection
@@ -110,8 +122,8 @@ model_key_map = {
 # Showing model performance
 with col2:
     model_key = model_key_map.get(selected_model.replace(" (Recommended)", ""), "random_forest")
-    if model_key in artifacts["model_results"]:
-        metrics = artifacts["model_results"][model_key]
+    if model_key in model_results:
+        metrics = model_results[model_key]
         st.metric("Accuracy", f"{metrics['accuracy']:.1%}")
         st.metric("ROC AUC", f"{metrics['roc_auc']:.3f}")
 
@@ -168,23 +180,24 @@ with col_input:
 
         department = st.selectbox(
             "Department",
-            artifacts["le_dept"].classes_
+            preprocessing["le_dept"].categories_[0]
         )
 
         salary = st.selectbox(
             "Salary Level",
-            artifacts["le_salary"].classes_
+            preprocessing["le_salary"].categories_[0]
         )
 
-        submitted = st.form_submit_button("Predict Attrition Risk", width='stretch')
+        submitted = st.form_submit_button("Predict Attrition Risk")
 
 with col_importance:
     # Displaying feature importance for selected model
     importance_key = model_key_map.get(selected_model.replace(" (Recommended)", ""), "random_forest")
-    if importance_key in artifacts["feature_importances"]:
+    feature_importance = load_feature_importance(importance_key)
+    if feature_importance is not None:
         st.subheader(f"Feature Importance ({selected_model.replace(' (Recommended)', '')})")
         fig_importance = px.bar(
-            artifacts["feature_importances"][importance_key].head(5),
+            feature_importance.head(5),
             x="importance",
             y="feature",
             orientation="h",
@@ -199,29 +212,33 @@ with col_importance:
 # Handling prediction
 if submitted:
     # Encoding categorical inputs
-    dept_encoded = artifacts["le_dept"].transform([department])[0]
-    salary_encoded = artifacts["le_salary"].transform([salary])[0]
+    # Department: OneHotEncoder creates 9 binary features
+    dept_encoded = preprocessing["le_dept"].transform([[department]])[0]
+    # Salary: OrdinalEncoder creates 1 numeric feature
+    salary_encoded = preprocessing["le_salary"].transform([[salary]])[0][0]
 
-    # Creating feature array
+    # Creating feature array (17 features total)
+    # 7 numeric + 1 salary + 9 one-hot departments
     features = np.array([[
         satisfaction, last_evaluation, num_projects, monthly_hours,
-        tenure, work_accident, promotion, dept_encoded, salary_encoded
-    ]])
+        tenure, work_accident, promotion, salary_encoded
+    ] + list(dept_encoded)])
 
-    # Selecting model and getting prediction
-    if "Random Forest" in selected_model:
-        model = artifacts["rf_model"]
-        proba = model.predict_proba(features)[0]
-    elif "Logistic Regression" in selected_model:
-        model = artifacts["lr_model"]
-        features_scaled = artifacts["scaler"].transform(features)
-        proba = model.predict_proba(features_scaled)[0]
-    elif "XGBoost" in selected_model:
-        model = artifacts["xgb_model"]
-        proba = model.predict_proba(features)[0]
-    elif "LightGBM" in selected_model:
-        model = artifacts["lgb_model"]
-        proba = model.predict_proba(features)[0]
+    # Selecting model and getting prediction (lazy load)
+    with st.spinner("Running prediction..."):
+        if "Random Forest" in selected_model:
+            model = load_model("random_forest")
+            proba = model.predict_proba(features)[0]
+        elif "Logistic Regression" in selected_model:
+            model = load_model("logistic_regression")
+            features_scaled = preprocessing["scaler"].transform(features)
+            proba = model.predict_proba(features_scaled)[0]
+        elif "XGBoost" in selected_model:
+            model = load_model("xgboost")
+            proba = model.predict_proba(features)[0]
+        elif "LightGBM" in selected_model:
+            model = load_model("lightgbm")
+            proba = model.predict_proba(features)[0]
 
     attrition_prob = proba[1] * 100
     stay_prob = proba[0] * 100
@@ -318,8 +335,8 @@ with st.expander("About the Models"):
             - Best for accurate predictions
             """)
 
-        if artifacts.get("xgb_model") is not None:
-            xgb_metrics = artifacts["model_results"].get("xgboost", {})
+        if "xgboost" in model_results:
+            xgb_metrics = model_results.get("xgboost", {})
             st.markdown(f"""
                 **XGBoost**
                 - {xgb_metrics.get('accuracy', 0):.1%} accuracy, {xgb_metrics.get('roc_auc', 0):.4f} ROC AUC
@@ -329,8 +346,8 @@ with st.expander("About the Models"):
                 """)
 
     with col2:
-        if artifacts.get("lgb_model") is not None:
-            lgb_metrics = artifacts["model_results"].get("lightgbm", {})
+        if "lightgbm" in model_results:
+            lgb_metrics = model_results.get("lightgbm", {})
             st.markdown(f"""
                 **LightGBM**
                 - {lgb_metrics.get('accuracy', 0):.1%} accuracy, {lgb_metrics.get('roc_auc', 0):.4f} ROC AUC

@@ -6,27 +6,15 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from config import HR_DATA_PATH
+from session_utils import get_hr_data
 
 st.set_page_config(page_title="Attrition Analysis", layout="wide")
 
-@st.cache_data
-def load_data():
-    """Load HR employee data from CSV."""
-    try:
-        df = pd.read_csv(HR_DATA_PATH)
-        for col in df.select_dtypes(include=["object", "string"]).columns:
-            df[col] = df[col].astype("category")
-        return df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
-
 st.title("Detailed Attrition Analysis")
 
-df = load_data()
+df = get_hr_data()
 
-if not df.empty:
+if df is not None and not df.empty:
     # Filters
     col1, col2, col3 = st.columns(3)
     with col1:

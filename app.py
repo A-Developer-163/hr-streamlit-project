@@ -7,58 +7,26 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from config import HR_DATA_PATH
+from session_utils import init_session_state, get_hr_data, get_summary_stats
 
 st.set_page_config(
     page_title="HR Employee Analytics",
     layout="wide",
 )
 
-@st.cache_data
-def load_data():
-    """Load HR employee data from CSV."""
-    try:
-        df = pd.read_csv(HR_DATA_PATH)
-        for col in df.select_dtypes(include=["object", "string"]).columns:
-            df[col] = df[col].astype("category")
-        return df
-    except FileNotFoundError:
-        st.error("CSV file not found. Run: python scripts/transform_data.py")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
-
-@st.cache_data
-def get_summary_stats(_df):
-    """Calculate summary statistics."""
-    total = len(_df)
-    left = _df["left"].sum()
-    stayed = total - left
-    attrition_rate = (left / total) * 100
-    avg_satisfaction = _df["satisfaction_level"].mean()
-    avg_hours = _df["average_montly_hours"].mean()
-
-    return {
-        "total": total,
-        "left": left,
-        "stayed": stayed,
-        "attrition_rate": attrition_rate,
-        "avg_satisfaction": avg_satisfaction,
-        "avg_hours": avg_hours,
-        "departments": _df["Department"].nunique(),
-    }
+# Initialise shared session state
+init_session_state()
 
 def main():
     st.title("HR Employee Analytics Dashboard")
 
-    df = load_data()
+    df = get_hr_data()
 
-    if df.empty:
+    if df is None or df.empty:
         st.warning("Unable to load data. Please ensure `data/hr_employee_data.csv` exists.")
         return
 
-    stats = get_summary_stats(df)
+    stats = get_summary_stats()
 
     # Key Metrics
     col1, col2, col3, col4, col5 = st.columns(5)
