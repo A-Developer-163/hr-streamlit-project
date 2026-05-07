@@ -14,12 +14,13 @@ Usage:
 
 import argparse
 import json
-import pickle
+import joblib
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from config import MODELS_DIR, HR_DATA_PATH
 
 # Use non-interactive backend for saving plots
 import matplotlib
@@ -52,26 +53,23 @@ def load_model_artifacts(models_dir: Path) -> dict:
     artifacts = {}
 
     # Load Random Forest model
-    model_path = models_dir / "random_forest_model.pkl"
-    with open(model_path, 'rb') as f:
-        artifacts['model'] = pickle.load(f)
-    print(f"  ✓ Loaded model from {model_path}")
+    model_path = models_dir / "rf_attrition_model.pkl"
+    artifacts['model'] = joblib.load(model_path)
+    print(f"  [OK] Loaded model from {model_path}")
 
     # Load feature columns
     features_path = models_dir / "feature_columns.json"
     with open(features_path, 'r') as f:
         artifacts['feature_columns'] = json.load(f)
-    print(f"  ✓ Loaded {len(artifacts['feature_columns'])} features")
+    print(f"  [OK] Loaded {len(artifacts['feature_columns'])} features")
 
     # Load label encoders
-    le_dept_path = models_dir / "label_encoder_department.pkl"
-    with open(le_dept_path, 'rb') as f:
-        artifacts['le_department'] = pickle.load(f)
+    le_dept_path = models_dir / "department_encoder.pkl"
+    artifacts['le_department'] = joblib.load(le_dept_path)
 
-    le_salary_path = models_dir / "label_encoder_salary.pkl"
-    with open(le_salary_path, 'rb') as f:
-        artifacts['le_salary'] = pickle.load(f)
-    print(f"  ✓ Loaded label encoders")
+    le_salary_path = models_dir / "salary_encoder.pkl"
+    artifacts['le_salary'] = joblib.load(le_salary_path)
+    print(f"  [OK] Loaded label encoders")
 
     return artifacts
 
@@ -90,27 +88,31 @@ def load_and_preprocess_data(data_path: Path, artifacts: dict) -> pd.DataFrame:
     print("Loading and preprocessing data...")
 
     df = pd.read_csv(data_path)
-    print(f"  ✓ Loaded {len(df)} records from {data_path}")
+    print(f"  [OK] Loaded {len(df)} records from {data_path}")
 
-    # Encode categorical features using the saved encoders
-    if 'Department' in df.columns:
-        df['Department'] = artifacts['le_department'].transform(
-            df['Department'].fillna('Unknown')
-        )
+    X = df.copy()
 
-    if 'Salary' in df.columns:
-        df['Salary'] = artifacts['le_salary'].transform(
-            df['Salary'].fillna('Medium')
-        )
+    # Encode salary (ordinal) - using 'salary' column name
+    X["salary"] = artifacts['le_salary'].transform(
+        X[["salary"]].fillna("medium")
+    ).flatten()
+
+    # Encode department (one-hot)
+    dept_encoded = artifacts['le_department'].transform(
+        X[["Department"]].fillna("Unknown")
+    )
+    dept_columns = [f'Dept_{cat}' for cat in artifacts['le_department'].categories_[0][1:]]
+    for i, col in enumerate(dept_columns):
+        X[col] = dept_encoded[:, i]
 
     # Extract feature columns
     feature_cols = artifacts['feature_columns']
-    X = df[feature_cols].copy()
+    X = X[feature_cols].copy()
 
     # Handle any missing values
     X = X.fillna(X.median())
 
-    print(f"  ✓ Preprocessed {len(X)} samples with {len(feature_cols)} features")
+    print(f"  [OK] Preprocessed {len(X)} samples with {len(feature_cols)} features")
 
     return X
 
@@ -143,7 +145,7 @@ def compute_shap_values(
 
     # Create TreeExplainer for Random Forest
     explainer = shap.TreeExplainer(model)
-    print("  ✓ Created TreeExplainer")
+    print("  [OK] Created TreeExplainer")
 
     # Compute SHAP values
     shap_values = explainer.shap_values(X_sample)
@@ -153,7 +155,7 @@ def compute_shap_values(
         # Use SHAP values for the positive class (attrition = 1)
         shap_values = shap_values[1]
 
-    print(f"  ✓ Computed SHAP values with shape {shap_values.shape}")
+    print(f"  [OK] Computed SHAP values with shape {shap_values.shape}")
 
     return explainer, shap_values, sample_indices
 
@@ -179,11 +181,12 @@ def create_summary_plot(
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print(f"  ✓ Saved summary plot to {save_path}")
+    print(f"  [OK] Saved summary plot to {save_path}")
 
 
 def create_importance_plot(
     shap_values,
+    explainer,
     X: pd.DataFrame,
     save_path: Path,
     top_n: int = 20
@@ -193,6 +196,7 @@ def create_importance_plot(
 
     Args:
         shap_values: Computed SHAP values
+        explainer: SHAP explainer object
         X: Feature DataFrame for the sampled data
         save_path: Path to save the plot
         top_n: Number of top features to display
@@ -200,7 +204,18 @@ def create_importance_plot(
     print(f"Creating feature importance plot...")
 
     plt.figure(figsize=(10, 8))
-    shap.plots.bar(shap_values, show=False, max_display=top_n)
+
+    # Handle binary classification output - extract class 1 values
+    if isinstance(shap_values, list):
+        shap_vals = shap_values[1]
+    elif len(shap_values.shape) == 3:
+        shap_vals = shap_values[:, :, 1]
+    else:
+        shap_vals = shap_values
+
+    # Create Explanation object for the new SHAP API
+    explanation = shap.Explanation(values=shap_vals, base_values=explainer.expected_value, data=X, feature_names=X.columns)
+    shap.plots.bar(explanation, show=False, max_display=top_n)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
@@ -225,8 +240,16 @@ def create_dependence_plots(
     """
     print(f"Creating dependence plots for top {top_n} features...")
 
+    # Handle binary classification output - extract class 1 values
+    if isinstance(shap_values, list):
+        shap_vals = shap_values[1]
+    elif len(shap_values.shape) == 3:
+        shap_vals = shap_values[:, :, 1]
+    else:
+        shap_vals = shap_values
+
     # Calculate mean absolute SHAP values to find top features
-    mean_shap = np.abs(shap_values).mean(axis=0)
+    mean_shap = np.abs(shap_vals).mean(axis=0)
     top_indices = np.argsort(mean_shap)[-top_n:][::-1]
 
     fig, axes = plt.subplots(1, top_n, figsize=(12, 5))
@@ -238,7 +261,7 @@ def create_dependence_plots(
         feature_idx = top_indices[idx]
         shap.dependence_plot(
             feature_idx,
-            shap_values,
+            shap_vals,
             X,
             show=False,
             ax=ax
@@ -296,7 +319,7 @@ def save_shap_values(
     print(f"Saving SHAP values...")
 
     np.save(save_path, shap_values)
-    print(f"  ✓ Saved SHAP values to {save_path}")
+    print(f"  [OK] Saved SHAP values to {save_path}")
 
 
 def save_explanation_summary(
@@ -316,8 +339,16 @@ def save_explanation_summary(
     """
     print(f"Saving explanation summary...")
 
+    # Handle binary classification output - extract class 1 values
+    if isinstance(shap_values, list):
+        shap_vals = shap_values[1]
+    elif len(shap_values.shape) == 3:
+        shap_vals = shap_values[:, :, 1]
+    else:
+        shap_vals = shap_values
+
     # Calculate mean absolute SHAP values for each feature
-    mean_shap = np.abs(shap_values).mean(axis=0)
+    mean_shap = np.abs(shap_vals).mean(axis=0)
 
     # Create feature importance ranking
     feature_importance = [
@@ -336,7 +367,7 @@ def save_explanation_summary(
     ]
 
     summary = {
-        "n_samples": len(shap_values),
+        "n_samples": len(shap_vals),
         "n_features": len(feature_names),
         "top_features": feature_importance[:top_n],
         "total_shap_sum": float(np.abs(mean_shap).sum())
@@ -371,14 +402,14 @@ def main():
     parser.add_argument(
         "--models-dir",
         type=str,
-        default="models",
-        help="Path to models directory (default: models)"
+        default=str(MODELS_DIR),
+        help=f"Path to models directory (default: {MODELS_DIR})"
     )
     parser.add_argument(
         "--data-path",
         type=str,
-        default="data/hr_employee_data.csv",
-        help="Path to HR data CSV file (default: data/hr_employee_data.csv)"
+        default=HR_DATA_PATH,
+        help=f"Path to HR data CSV file (default: {HR_DATA_PATH})"
     )
 
     args = parser.parse_args()
@@ -412,7 +443,7 @@ def main():
 
     # Create visualizations
     create_summary_plot(shap_values, X_sample, models_dir / "shap_summary.png")
-    create_importance_plot(shap_values, X_sample, models_dir / "shap_importance.png")
+    create_importance_plot(shap_values, explainer, X_sample, models_dir / "shap_importance.png")
     create_dependence_plots(shap_values, X_sample, models_dir / "shap_dependence.png")
 
     # Save computed values
@@ -439,7 +470,7 @@ def main():
 
     print()
     print("=" * 60)
-    print("✓ SHAP analysis complete!")
+    print("[OK] SHAP analysis complete!")
     print(f"  Outputs saved to: {models_dir}/")
     print("=" * 60)
 

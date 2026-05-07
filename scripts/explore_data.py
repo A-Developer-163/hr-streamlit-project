@@ -7,9 +7,17 @@ Analyzes the dataset to discover potential data science project opportunities.
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from config import HR_DATA_PATH
 
 
-def analyze_dataset(csv_path: str = "data/hr_employee_data.csv") -> None:
+def analyze_dataset(csv_path: str = None) -> None:
+    """Comprehensive analysis of HR employee dataset.
+
+    Args:
+        csv_path: Path to CSV file (defaults to config.HR_DATA_PATH)
+    """
+    if csv_path is None:
+        csv_path = HR_DATA_PATH
     """Comprehensive analysis of HR employee dataset."""
 
     print("=" * 60)
@@ -115,8 +123,8 @@ def analyze_dataset(csv_path: str = "data/hr_employee_data.csv") -> None:
         target_col = 'left' if 'left' in df.columns else ('attrition' if 'attrition' in df.columns else None)
         if target_col and df[target_col].nunique() == 2:
             attrition_rate = df[target_col].mean() * 100
-            print(f"  ⭐ Target variable found: '{target_col}'")
-            print(f"  ⭐ Attrition rate: {attrition_rate:.1f}%")
+            print(f"  [*] Target variable found: '{target_col}'")
+            print(f"  [*] Attrition rate: {attrition_rate:.1f}%")
 
     if 'salary' in df.columns or 'income' in col_names_lower:
         projects.append("Salary Analysis & Compensation Benchmarking")

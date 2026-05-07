@@ -4,17 +4,18 @@ Test data loading functionality
 
 import pandas as pd
 import pytest
+from config import HR_EXCEL_DATA_PATH
 
 
 def test_hr_data_file_exists():
     """Test that the HR data file exists."""
     import os
-    assert os.path.exists("data/hr_employee_data.xlsx"), "HR data file not found"
+    assert os.path.exists(HR_EXCEL_DATA_PATH), "HR data file not found"
 
 
 def test_load_hr_data():
     """Test loading the HR Excel file."""
-    df = pd.read_excel("data/hr_employee_data.xlsx")
+    df = pd.read_excel(HR_EXCEL_DATA_PATH)
     assert isinstance(df, pd.DataFrame)
     assert len(df) > 0
     assert len(df.columns) > 0

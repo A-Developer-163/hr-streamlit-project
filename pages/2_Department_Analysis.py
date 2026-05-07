@@ -5,6 +5,7 @@ Department Analysis Page
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from config import HR_DATA_PATH
 
 st.set_page_config(page_title="Department Analysis", layout="wide")
 
@@ -12,7 +13,7 @@ st.set_page_config(page_title="Department Analysis", layout="wide")
 def load_data():
     """Load HR employee data from CSV."""
     try:
-        df = pd.read_csv("data/hr_employee_data.csv")
+        df = pd.read_csv(HR_DATA_PATH)
         for col in df.select_dtypes(include=["object", "string"]).columns:
             df[col] = df[col].astype("category")
         return df

@@ -15,6 +15,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from config import MODELS_DIR
 
 
 # Expected model files
@@ -34,7 +35,7 @@ LR_ROC_AUC_THRESHOLD = 0.75
 @pytest.fixture
 def models_dir():
     """Path to the models directory."""
-    return Path("models")
+    return MODELS_DIR
 
 
 @pytest.fixture

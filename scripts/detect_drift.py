@@ -23,6 +23,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 
+from config import HR_DATA_PATH, MODELS_DIR, DRIFT_PLOT_PATH
+
 
 def compute_psi(expected: np.ndarray, actual: np.ndarray, bins: int = 10) -> float:
     """
@@ -291,7 +293,16 @@ def detect_drift(baseline: Dict[str, Any], new_df: pd.DataFrame,
 
 
 def create_drift_visualization(baseline: Dict[str, Any], new_df: pd.DataFrame,
-                               output_path: str = 'models/drift_plot.png'):
+                               output_path: str = None):
+    """Create visualization comparing baseline and new data distributions.
+
+    Args:
+        baseline: Baseline statistics dictionary
+        new_df: New data dataframe
+        output_path: Path to save the plot (defaults to config.DRIFT_PLOT_PATH)
+    """
+    if output_path is None:
+        output_path = DRIFT_PLOT_PATH
     """
     Create visualization comparing baseline and new data distributions.
 
@@ -398,12 +409,12 @@ def print_drift_summary(drift_df: pd.DataFrame):
     print(f"\nSummary: {n_ok} OK, {n_warning} Warnings, {n_drift} Drift Detected, {n_missing} Missing")
 
     if n_drift > 0:
-        print("\n⚠️  SIGNIFICANT DRIFT DETECTED!")
+        print("\n[!] SIGNIFICANT DRIFT DETECTED!")
         drift_features = drift_df[drift_df['status'] == 'Drift']['feature'].tolist()
         print(f"Features with drift: {', '.join(drift_features)}")
 
     if n_warning > 0:
-        print("\n⚠️  Warnings:")
+        print("\n[!] Warnings:")
         warning_features = drift_df[drift_df['status'] == 'Warning']['feature'].tolist()
         print(f"Features with warnings: {', '.join(warning_features)}")
 
@@ -413,7 +424,7 @@ def print_drift_summary(drift_df: pd.DataFrame):
 
     for _, row in drift_df.iterrows():
         value_str = f"{row['value']:.4f}" if not pd.isna(row['value']) else "N/A"
-        status_symbol = "✓" if row['status'] == "OK" else "⚠" if row['status'] == "Warning" else "✗" if row['status'] == "Drift" else "?"
+        status_symbol = "[OK]" if row['status'] == "OK" else "[WARN]" if row['status'] == "Warning" else "[DRIFT]" if row['status'] == "Drift" else "[?]"
         print(f"{row['feature']:<25} {row['type']:<12} {row['metric']:<15} {value_str:<10} {status_symbol} {row['status']}")
 
     print("-"*80)
@@ -437,14 +448,14 @@ def main():
     parser.add_argument(
         '--baseline-data',
         type=str,
-        default='data/hr_employee_data.csv',
-        help='Path to baseline/training data CSV file (default: data/hr_employee_data.csv)'
+        default=HR_DATA_PATH,
+        help=f'Path to baseline/training data CSV file (default: {HR_DATA_PATH})'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='models',
-        help='Directory to save output files (default: models)'
+        default=str(MODELS_DIR),
+        help=f'Directory to save output files (default: {MODELS_DIR})'
     )
     parser.add_argument(
         '--skip-visualization',
@@ -510,10 +521,10 @@ def main():
 
     # Exit with code 1 if drift detected
     if detailed_report['drift_detected']:
-        print("⚠️  Data drift detected! Please review the model performance.")
+        print("[!] Data drift detected! Please review the model performance.")
         sys.exit(1)
     else:
-        print("✓ No significant data drift detected.")
+        print("[OK] No significant data drift detected.")
         sys.exit(0)
 
 

@@ -18,6 +18,7 @@ from pathlib import Path
 import json
 
 from sklearn.model_selection import train_test_split, cross_val_score
+from config import HR_DATA_PATH, MODELS_DIR
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
 from sklearn.pipeline import make_pipeline
 from sklearn.ensemble import RandomForestClassifier
@@ -68,8 +69,14 @@ def bootstrap_metric_ci(y_true, y_pred, y_proba, metric_func, n_bootstrap=1000, 
     return {"mean": float(mean), "std": float(std), "lower": float(lower), "upper": float(upper)}
 
 
-def load_and_preprocess_data(csv_path: str = "data/hr_employee_data.csv"):
-    """Load and preprocess data for modeling."""
+def load_and_preprocess_data(csv_path: str = None):
+    """Load and preprocess data for modeling.
+
+    Args:
+        csv_path: Path to CSV file (defaults to config.HR_DATA_PATH)
+    """
+    if csv_path is None:
+        csv_path = HR_DATA_PATH
     df = pd.read_csv(csv_path)
 
     # Drop Emp_Id (not predictive)
@@ -409,7 +416,7 @@ def save_artifacts(models, results, feature_importance, salary_encoder,
                    department_encoder, feature_cols, confusion_matrices,
                    classification_reports, optimal_thresholds, fairness_results=None):
     """Save model artifacts for use in dashboard."""
-    output_dir = Path("models")
+    output_dir = MODELS_DIR
     output_dir.mkdir(exist_ok=True)
 
     # Save models
@@ -533,9 +540,9 @@ def main():
     salary_ratio = fairness_results['by_salary']['demographic_parity_ratio']
     dept_ratio = fairness_results['by_department']['demographic_parity_ratio']
     print(f"\nSalary Demographic Parity Ratio: {salary_ratio:.4f}")
-    print(f"  {'✓ Passes' if salary_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
+    print(f"  {'[PASS]' if salary_ratio >= 0.8 else '[FAIL]'} EEOC 80% rule")
     print(f"\nDepartment Demographic Parity Ratio: {dept_ratio:.4f}")
-    print(f"  {'✓ Passes' if dept_ratio >= 0.8 else '⚠️ Fails'} EEOC 80% rule")
+    print(f"  {'[PASS]' if dept_ratio >= 0.8 else '[FAIL]'} EEOC 80% rule")
 
     # Save everything
     save_artifacts(models, results, feature_importance, salary_enc, dept_enc,

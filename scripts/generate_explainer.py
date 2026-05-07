@@ -12,15 +12,22 @@ import json
 import shap
 import time
 from pathlib import Path
+from config import MODELS_DIR, HR_DATA_PATH
 
 
-def load_artifacts(models_path: Path = Path("models")):
-    """Load trained model and preprocessing artifacts."""
+def load_artifacts(models_path: Path = None):
+    """Load trained model and preprocessing artifacts.
+
+    Args:
+        models_path: Path to models directory (defaults to config.MODELS_DIR)
+    """
+    if models_path is None:
+        models_path = MODELS_DIR
     print("Loading model artifacts...")
 
-    rf_model = joblib.load(models_path / "random_forest_model.pkl")
-    le_department = joblib.load(models_path / "label_encoder_department.pkl")
-    le_salary = joblib.load(models_path / "label_encoder_salary.pkl")
+    rf_model = joblib.load(models_path / "rf_attrition_model.pkl")
+    le_department = joblib.load(models_path / "department_encoder.pkl")
+    le_salary = joblib.load(models_path / "salary_encoder.pkl")
 
     with open(models_path / "feature_columns.json", "r") as f:
         feature_cols = json.load(f)
@@ -35,8 +42,14 @@ def load_artifacts(models_path: Path = Path("models")):
     return rf_model, le_department, le_salary, feature_cols, model_results
 
 
-def load_data(data_path: Path = Path("data/hr_employee_data.csv")):
-    """Load and preprocess HR employee data."""
+def load_data(data_path: Path = None):
+    """Load and preprocess HR employee data.
+
+    Args:
+        data_path: Path to data file (defaults to config.HR_DATA_PATH)
+    """
+    if data_path is None:
+        data_path = Path(HR_DATA_PATH)
     print("\nLoading data...")
     df = pd.read_csv(data_path)
     df = df.drop("Emp_Id", axis=1)
@@ -51,12 +64,20 @@ def prepare_features(df, le_department, le_salary, feature_cols):
     """Encode categorical features and prepare feature matrix."""
     print("\nPreparing features...")
 
-    X = df[feature_cols].copy()
-    y = df["left"]
+    X = df.copy()
 
-    # Encode categorical features
-    X["Department"] = le_department.transform(X["Department"])
-    X["salary"] = le_salary.transform(X["salary"])
+    # Encode salary (ordinal) - use 'salary' column name to match training
+    X["salary"] = le_salary.transform(X[["salary"]]).flatten()
+
+    # Encode department (one-hot)
+    dept_encoded = le_department.transform(X[["Department"]])
+    dept_columns = [f'Dept_{cat}' for cat in le_department.categories_[0][1:]]
+    for i, col in enumerate(dept_columns):
+        X[col] = dept_encoded[:, i]
+
+    # Select only the feature columns
+    X = X[feature_cols].copy()
+    y = df["left"]
 
     print(f"  [OK] Dataset shape: {X.shape}")
 
@@ -180,8 +201,8 @@ def main():
     print("SHAP EXPLAINER GENERATION")
     print("=" * 70)
 
-    models_path = Path("models")
-    data_path = Path("data/hr_employee_data.csv")
+    models_path = MODELS_DIR
+    data_path = Path(HR_DATA_PATH)
 
     # Load artifacts
     rf_model, le_dept, le_sal, feature_cols, model_results = load_artifacts(models_path)

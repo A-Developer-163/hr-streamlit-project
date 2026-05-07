@@ -5,12 +5,13 @@ Overview Page - Employee Demographics
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from config import HR_EXCEL_DATA_PATH
 
 st.set_page_config(page_title="Overview", page_icon="📊")
 
 @st.cache_data
 def load_data():
-    return pd.read_excel("data/hr_employee_data.xlsx")
+    return pd.read_excel(HR_EXCEL_DATA_PATH)
 
 st.title("📊 Employee Overview")
 
