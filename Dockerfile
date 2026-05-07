@@ -40,6 +40,9 @@ from dependencies as development
 # Copy application code
 COPY . .
 
+# Installing project in editable mode
+RUN pip install --no-warn-script-location -e .
+
 # Change ownership to appuser
 RUN chown -R appuser:appuser /app
 
@@ -59,6 +62,9 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY . .
+
+# Installing project
+RUN pip install --no-warn-script-location .
 
 # Change ownership to appuser
 RUN chown -R appuser:appuser /app
