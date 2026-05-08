@@ -79,13 +79,13 @@ def load_and_preprocess_data(csv_path: str = None):
         csv_path = HR_DATA_PATH
     df = pd.read_csv(csv_path)
 
-    # Drop Emp_Id (not predictive)
-    df = df.drop("Emp_Id", axis=1)
+    # Drop employee_id (not predictive)
+    df = df.drop("employee_id", axis=1)
 
     # Feature columns
-    feature_cols = [c for c in df.columns if c != "left"]
+    feature_cols = [c for c in df.columns if c != "attrition"]
     X = df[feature_cols]
-    y = df["left"]
+    y = df["attrition"]
 
     return df, X, y, feature_cols
 
@@ -121,32 +121,32 @@ def train_models(df, X, y):
     X_val['salary'] = salary_encoder.transform(X_val[['salary']])
     X_test['salary'] = salary_encoder.transform(X_test[['salary']])
 
-    # OneHot encode Department - FIT FIRST to get categories
-    X_train_dept = department_encoder.fit_transform(X_train[['Department']])
+    # OneHot encode department - FIT FIRST to get categories
+    X_train_dept = department_encoder.fit_transform(X_train[['department']])
     dept_columns = [f'Dept_{cat}' for cat in department_encoder.categories_[0][1:]]
-    X_val_dept = department_encoder.transform(X_val[['Department']])
-    X_test_dept = department_encoder.transform(X_test[['Department']])
+    X_val_dept = department_encoder.transform(X_val[['department']])
+    X_test_dept = department_encoder.transform(X_test[['department']])
 
-    # Add one-hot columns and drop original Department
+    # Add one-hot columns and drop original department
     for i, col in enumerate(dept_columns):
         X_train[col] = X_train_dept[:, i]
         X_val[col] = X_val_dept[:, i]
         X_test[col] = X_test_dept[:, i]
 
-    X_train = X_train.drop('Department', axis=1)
-    X_val = X_val.drop('Department', axis=1)
-    X_test = X_test.drop('Department', axis=1)
+    X_train = X_train.drop('department', axis=1)
+    X_val = X_val.drop('department', axis=1)
+    X_test = X_test.drop('department', axis=1)
 
     # Update feature columns
-    feature_cols_encoded = [c for c in X_train.columns if c != 'left']
+    feature_cols_encoded = [c for c in X_train.columns if c != 'attrition']
 
     # Encode full X for cross-validation
     X_encoded = X.copy()
     X_encoded['salary'] = salary_encoder.transform(X_encoded[['salary']])
-    X_encoded_dept = department_encoder.transform(X_encoded[['Department']])
+    X_encoded_dept = department_encoder.transform(X_encoded[['department']])
     for i, col in enumerate(dept_columns):
         X_encoded[col] = X_encoded_dept[:, i]
-    X_encoded = X_encoded.drop('Department', axis=1)
+    X_encoded = X_encoded.drop('department', axis=1)
 
     # Scale features for Logistic Regression
     scaler = StandardScaler()

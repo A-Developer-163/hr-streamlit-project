@@ -20,8 +20,8 @@ if df is not None and not df.empty:
     with col1:
         dept_filter = st.multiselect(
             "Filter by Department",
-            options=df["Department"].unique(),
-            default=df["Department"].unique()
+            options=df["department"].unique(),
+            default=df["department"].unique()
         )
     with col2:
         salary_filter = st.multiselect(
@@ -39,7 +39,7 @@ if df is not None and not df.empty:
 
     # Apply filters
     filtered_df = df[
-        (df["Department"].isin(dept_filter)) &
+        (df["department"].isin(dept_filter)) &
         (df["salary"].isin(salary_filter)) &
         (df["satisfaction_level"].between(satisfaction_range[0], satisfaction_range[1]))
     ].copy()
@@ -48,7 +48,7 @@ if df is not None and not df.empty:
 
     # Attrition rate for filtered data
     if len(filtered_df) > 0:
-        attrition_rate = filtered_df["left"].mean() * 100
+        attrition_rate = filtered_df["attrition"].mean() * 100
         st.metric("Filtered Attrition Rate", f"{attrition_rate:.1f}%")
 
     st.divider()
@@ -58,33 +58,33 @@ if df is not None and not df.empty:
 
     with col1:
         st.subheader("Tenure vs Attrition")
-        tenure_attrition = filtered_df.groupby("time_spend_company")["left"].agg(["sum", "count", "mean"]).reset_index()
+        tenure_attrition = filtered_df.groupby("years_at_company")["attrition"].agg(["sum", "count", "mean"]).reset_index()
         tenure_attrition["attrition_pct"] = tenure_attrition["mean"] * 100
 
         fig_tenure = px.line(
             tenure_attrition,
-            x="time_spend_company",
+            x="years_at_company",
             y="attrition_pct",
             title="Attrition Rate by Tenure (Years)",
             markers=True,
-            labels={"time_spend_company": "Years at Company", "attrition_pct": "Attrition Rate (%)"}
+            labels={"years_at_company": "Years at Company", "attrition_pct": "Attrition Rate (%)"}
         )
         fig_tenure.update_traces(line_color="#e74c3c", marker_size=10)
         st.plotly_chart(fig_tenure, width='stretch')
 
     with col2:
         st.subheader("Projects vs Attrition")
-        project_attrition = filtered_df.groupby("number_project")["left"].agg(["sum", "count", "mean"]).reset_index()
+        project_attrition = filtered_df.groupby("num_projects")["attrition"].agg(["sum", "count", "mean"]).reset_index()
         project_attrition["attrition_pct"] = project_attrition["mean"] * 100
 
         fig_projects = px.bar(
             project_attrition,
-            x="number_project",
+            x="num_projects",
             y="attrition_pct",
             title="Attrition Rate by Number of Projects",
             color="attrition_pct",
             color_continuous_scale="Reds",
-            labels={"number_project": "Number of Projects", "attrition_pct": "Attrition Rate (%)"}
+            labels={"num_projects": "Number of Projects", "attrition_pct": "Attrition Rate (%)"}
         )
         st.plotly_chart(fig_projects, width='stretch')
 
@@ -93,7 +93,7 @@ if df is not None and not df.empty:
 
     with col3:
         st.subheader("Last Evaluation Score")
-        eval_attrition = filtered_df.groupby(pd.cut(filtered_df["last_evaluation"], bins=5))["left"].mean() * 100
+        eval_attrition = filtered_df.groupby(pd.cut(filtered_df["last_evaluation"], bins=5))["attrition"].mean() * 100
 
         fig_eval = px.bar(
             x=eval_attrition.index.astype(str),
@@ -107,7 +107,7 @@ if df is not None and not df.empty:
 
     with col4:
         st.subheader("Work Accident Impact")
-        accident_data = filtered_df.groupby("Work_accident")["left"].agg(["count", "sum"])
+        accident_data = filtered_df.groupby("had_work_accident")["attrition"].agg(["count", "sum"])
         accident_data["attrition_pct"] = (accident_data["sum"] / accident_data["count"] * 100).round(1)
 
         fig_accident = go.Figure(data=[
@@ -120,8 +120,8 @@ if df is not None and not df.empty:
 
     # Correlation Analysis
     st.subheader("Feature Correlation with Attrition")
-    numeric_cols = ["satisfaction_level", "last_evaluation", "number_project", "average_montly_hours", "time_spend_company"]
-    correlations = filtered_df[numeric_cols].corrwith(filtered_df["left"]).abs().sort_values(ascending=False)
+    numeric_cols = ["satisfaction_level", "last_evaluation", "num_projects", "avg_monthly_hours", "years_at_company"]
+    correlations = filtered_df[numeric_cols].corrwith(filtered_df["attrition"]).abs().sort_values(ascending=False)
 
     fig_corr = px.bar(
         x=correlations.values,

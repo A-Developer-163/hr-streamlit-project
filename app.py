@@ -49,14 +49,14 @@ def main():
     # Attrition by Department
     with col_left:
         st.subheader("Attrition by Department")
-        dept_attrition = df.groupby("Department")["left"].agg(["sum", "count"]).reset_index()
+        dept_attrition = df.groupby("department")["attrition"].agg(["sum", "count"]).reset_index()
         dept_attrition["attrition_pct"] = (dept_attrition["sum"] / dept_attrition["count"] * 100).round(1)
         dept_attrition = dept_attrition.sort_values("attrition_pct", ascending=False)
 
         fig_dept = px.bar(
             dept_attrition,
             x="attrition_pct",
-            y="Department",
+            y="department",
             orientation="h",
             title="Attrition Rate by Department (%)",
             color="attrition_pct",
@@ -73,7 +73,7 @@ def main():
             x="satisfaction_level",
             nbins=20,
             title="Satisfaction Level Distribution",
-            color="left",
+            color="attrition",
             color_discrete_map={0: "#2ecc71", 1: "#e74c3c"},
         )
         fig_sat.update_layout(bargap=0.1)
@@ -85,7 +85,7 @@ def main():
     # Salary vs Attrition
     with col_left2:
         st.subheader("Attrition by Salary Level")
-        salary_attrition = df.groupby("salary")["left"].mean() * 100
+        salary_attrition = df.groupby("salary")["attrition"].mean() * 100
         fig_salary = px.bar(
             x=salary_attrition.index,
             y=salary_attrition.values,
@@ -102,10 +102,10 @@ def main():
         st.subheader("Monthly Hours by Status")
         fig_hours = px.box(
             df,
-            x="left",
-            y="average_montly_hours",
+            x="attrition",
+            y="avg_monthly_hours",
             title="Monthly Hours: Stayed vs Left",
-            color="left",
+            color="attrition",
             color_discrete_map={0: "#2ecc71", 1: "#e74c3c"},
         )
         fig_hours.update_xaxes(ticktext=["Stayed", "Left"], tickvals=[0, 1])

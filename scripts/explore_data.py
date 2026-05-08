@@ -118,9 +118,9 @@ def analyze_dataset(csv_path: str = None) -> None:
     col_names_lower = [c.lower() for c in df.columns]
 
     # Look for target variables
-    if 'left' in df.columns or 'attrition' in col_names_lower or 'turnover' in col_names_lower:
+    if 'attrition' in df.columns or 'left' in col_names_lower or 'turnover' in col_names_lower:
         projects.append("Employee Attrition Prediction (Classification)")
-        target_col = 'left' if 'left' in df.columns else ('attrition' if 'attrition' in df.columns else None)
+        target_col = 'attrition' if 'attrition' in df.columns else ('left' if 'left' in df.columns else None)
         if target_col and df[target_col].nunique() == 2:
             attrition_rate = df[target_col].mean() * 100
             print(f"  [*] Target variable found: '{target_col}'")

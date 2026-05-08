@@ -117,7 +117,7 @@ def compute_baseline_stats(df: pd.DataFrame, exclude_cols: List[str] = None) -> 
         Dictionary containing baseline statistics
     """
     if exclude_cols is None:
-        exclude_cols = ['Emp_Id']
+        exclude_cols = ['employee_id']
 
     baseline = {}
 
@@ -169,7 +169,7 @@ def detect_drift(baseline: Dict[str, Any], new_df: pd.DataFrame,
         Tuple of (drift summary dataframe, detailed report dictionary)
     """
     if exclude_cols is None:
-        exclude_cols = ['Emp_Id']
+        exclude_cols = ['employee_id']
 
     drift_results = []
     detailed_report = {

@@ -17,22 +17,22 @@ if df is not None and not df.empty:
     # Department selector
     selected_dept = st.selectbox(
         "Select Department",
-        options=["All Departments"] + sorted(df["Department"].unique().tolist())
+        options=["All Departments"] + sorted(df["department"].unique().tolist())
     )
 
     if selected_dept != "All Departments":
-        df_filtered = df[df["Department"] == selected_dept].copy()
+        df_filtered = df[df["department"] == selected_dept].copy()
     else:
         df_filtered = df.copy()
 
     # Department summary
-    dept_summary = df_filtered.groupby("Department").agg({
-        "Emp_Id": "count",
-        "left": "sum",
+    dept_summary = df_filtered.groupby("department").agg({
+        "employee_id": "count",
+        "attrition": "sum",
         "satisfaction_level": "mean",
         "last_evaluation": "mean",
-        "average_montly_hours": "mean",
-        "number_project": "mean",
+        "avg_monthly_hours": "mean",
+        "num_projects": "mean",
     }).round(2)
 
     dept_summary.columns = ["Employees", "Left", "Avg Satisfaction", "Avg Evaluation", "Avg Hours", "Avg Projects"]
@@ -50,16 +50,16 @@ if df is not None and not df.empty:
     with col1:
         st.subheader("Department Size Distribution")
         fig_size = px.pie(
-            df_filtered.groupby("Department").size().reset_index(name="count"),
+            df_filtered.groupby("department").size().reset_index(name="count"),
             values="count",
-            names="Department",
+            names="department",
             title="Employee Distribution by Department"
         )
         st.plotly_chart(fig_size, width='stretch')
 
     with col2:
         st.subheader("Average Hours by Department")
-        dept_hours = df_filtered.groupby("Department")["average_montly_hours"].mean().sort_values(ascending=False)
+        dept_hours = df_filtered.groupby("department")["avg_monthly_hours"].mean().sort_values(ascending=False)
         fig_hours = px.bar(
             x=dept_hours.index,
             y=dept_hours.values,
@@ -75,10 +75,10 @@ if df is not None and not df.empty:
     st.subheader("Satisfaction Levels by Department")
     fig_sat = px.box(
         df_filtered,
-        x="Department",
+        x="department",
         y="satisfaction_level",
         title="Satisfaction Level Distribution by Department",
-        color="Department"
+        color="department"
     )
     fig_sat.update_layout(showlegend=False)
     st.plotly_chart(fig_sat, width='stretch')

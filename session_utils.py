@@ -44,11 +44,11 @@ def calculate_summary_stats(df):
         return {}
 
     total = len(df)
-    left = df["left"].sum()
+    left = df["attrition"].sum()
     stayed = total - left
     attrition_rate = (left / total) * 100 if total > 0 else 0
     avg_satisfaction = df["satisfaction_level"].mean()
-    avg_hours = df["average_montly_hours"].mean()
+    avg_hours = df["avg_monthly_hours"].mean()
 
     return {
         "total": total,
@@ -57,7 +57,7 @@ def calculate_summary_stats(df):
         "attrition_rate": attrition_rate,
         "avg_satisfaction": avg_satisfaction,
         "avg_hours": avg_hours,
-        "departments": df["Department"].nunique(),
+        "departments": df["department"].nunique(),
     }
 
 
