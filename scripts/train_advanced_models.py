@@ -19,6 +19,11 @@ import time
 import os
 import argparse
 from dotenv import load_dotenv
+import sys
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import save_preprocessing_artifacts
 
 # Loading environment variables
 load_dotenv()
@@ -601,8 +606,15 @@ def save_artifacts(models, results, feature_importances, salary_encoder,
     joblib.dump(salary_encoder, output_dir / "salary_encoder.pkl")
     joblib.dump(department_encoder, output_dir / "department_encoder.pkl")
 
-    with open(output_dir / "feature_columns.json", "w") as f:
-        json.dump(feature_cols, f)
+    # Save preprocessing artifacts as a single file for faster loading
+    # Note: scaler is None for tree-based models (no scaling needed)
+    save_preprocessing_artifacts(
+        scaler=None,
+        salary_encoder=salary_encoder,
+        department_encoder=department_encoder,
+        feature_cols=feature_cols,
+        output_dir=output_dir
+    )
 
     for model_name in results:
         results[model_name]["training_time"] = training_times[model_name]

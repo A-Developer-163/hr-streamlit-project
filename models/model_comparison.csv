@@ -1,4 +1,4 @@
 model,top_feature,top_importance
 random_forest,satisfaction_level,0.27317495592355456
-xgboost,time_spend_company,0.29674646258354187
-lightgbm,average_montly_hours,700.0
+xgboost,years_at_company,0.29674646258354187
+lightgbm,avg_monthly_hours,700.0

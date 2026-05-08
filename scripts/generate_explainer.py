@@ -12,7 +12,7 @@ import json
 import shap
 import time
 from pathlib import Path
-from config import MODELS_DIR, HR_DATA_PATH
+from config import MODELS_DIR, HR_DATA_PATH, load_preprocessing_artifacts_combined
 
 
 def load_artifacts(models_path: Path = None):
@@ -26,11 +26,12 @@ def load_artifacts(models_path: Path = None):
     print("Loading model artifacts...")
 
     rf_model = joblib.load(models_path / "rf_attrition_model.pkl")
-    le_department = joblib.load(models_path / "department_encoder.pkl")
-    le_salary = joblib.load(models_path / "salary_encoder.pkl")
 
-    with open(models_path / "feature_columns.json", "r") as f:
-        feature_cols = json.load(f)
+    # Load preprocessing artifacts from combined file
+    preprocessing = load_preprocessing_artifacts_combined(models_path)
+    le_department = preprocessing['department_encoder']
+    le_salary = preprocessing['salary_encoder']
+    feature_cols = preprocessing['feature_cols']
 
     with open(models_path / "model_results.json", "r") as f:
         model_results = json.load(f)

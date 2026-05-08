@@ -18,7 +18,7 @@ from pathlib import Path
 import json
 
 from sklearn.model_selection import train_test_split, cross_val_score
-from config import HR_DATA_PATH, MODELS_DIR
+from config import HR_DATA_PATH, MODELS_DIR, save_preprocessing_artifacts
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
 from sklearn.pipeline import make_pipeline
 from sklearn.ensemble import RandomForestClassifier
@@ -426,13 +426,14 @@ def save_artifacts(models, results, feature_importance, salary_encoder,
     joblib.dump(models["logistic_regression_calibrated"]["model"], output_dir / "lr_attrition_model_calibrated.pkl")
     joblib.dump(models["logistic_regression"]["scaler"], output_dir / "scaler.pkl")
 
-    # Save encoders
-    joblib.dump(salary_encoder, output_dir / "salary_encoder.pkl")
-    joblib.dump(department_encoder, output_dir / "department_encoder.pkl")
-
-    # Save feature names
-    with open(output_dir / "feature_columns.json", "w") as f:
-        json.dump(feature_cols, f)
+    # Save preprocessing artifacts as a single file for faster loading
+    save_preprocessing_artifacts(
+        scaler=models["logistic_regression"]["scaler"],
+        salary_encoder=salary_encoder,
+        department_encoder=department_encoder,
+        feature_cols=feature_cols,
+        output_dir=output_dir
+    )
 
     # Save results
     with open(output_dir / "model_results.json", "w") as f:

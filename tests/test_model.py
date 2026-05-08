@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from config import load_preprocessing_artifacts_combined
 
 
 @pytest.fixture
@@ -22,12 +23,13 @@ def model_artifacts():
     try:
         artifacts["rf_model"] = joblib.load(models_dir / "random_forest_model.pkl")
         artifacts["lr_model"] = joblib.load(models_dir / "logistic_regression_model.pkl")
-        artifacts["scaler"] = joblib.load(models_dir / "scaler.pkl")
-        artifacts["le_dept"] = joblib.load(models_dir / "label_encoder_department.pkl")
-        artifacts["le_salary"] = joblib.load(models_dir / "label_encoder_salary.pkl")
 
-        with open(models_dir / "feature_columns.json", "r") as f:
-            artifacts["feature_cols"] = json.load(f)
+        # Load preprocessing artifacts from combined file
+        preprocessing = load_preprocessing_artifacts_combined(models_dir)
+        artifacts["scaler"] = preprocessing["scaler"]
+        artifacts["le_dept"] = preprocessing["department_encoder"]
+        artifacts["le_salary"] = preprocessing["salary_encoder"]
+        artifacts["feature_cols"] = preprocessing["feature_cols"]
 
         with open(models_dir / "model_results.json", "r") as f:
             artifacts["results"] = json.load(f)

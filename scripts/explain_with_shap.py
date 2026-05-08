@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from config import MODELS_DIR, HR_DATA_PATH
+from config import MODELS_DIR, HR_DATA_PATH, load_preprocessing_artifacts_combined
 
 # Use non-interactive backend for saving plots
 import matplotlib
@@ -57,19 +57,12 @@ def load_model_artifacts(models_dir: Path) -> dict:
     artifacts['model'] = joblib.load(model_path)
     print(f"  [OK] Loaded model from {model_path}")
 
-    # Load feature columns
-    features_path = models_dir / "feature_columns.json"
-    with open(features_path, 'r') as f:
-        artifacts['feature_columns'] = json.load(f)
-    print(f"  [OK] Loaded {len(artifacts['feature_columns'])} features")
-
-    # Load label encoders
-    le_dept_path = models_dir / "department_encoder.pkl"
-    artifacts['le_department'] = joblib.load(le_dept_path)
-
-    le_salary_path = models_dir / "salary_encoder.pkl"
-    artifacts['le_salary'] = joblib.load(le_salary_path)
-    print(f"  [OK] Loaded label encoders")
+    # Load preprocessing artifacts (combined file)
+    preprocessing = load_preprocessing_artifacts_combined(models_dir)
+    artifacts['feature_columns'] = preprocessing['feature_cols']
+    artifacts['le_department'] = preprocessing['department_encoder']
+    artifacts['le_salary'] = preprocessing['salary_encoder']
+    print(f"  [OK] Loaded {len(artifacts['feature_columns'])} features and encoders")
 
     return artifacts
 

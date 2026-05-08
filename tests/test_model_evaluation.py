@@ -15,15 +15,14 @@ import joblib
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from config import MODELS_DIR
+from config import MODELS_DIR, load_preprocessing_artifacts_combined
 
 
 # Expected model files
 EXPECTED_MODEL_FILES = [
     "random_forest_model.pkl",
     "logistic_regression_model.pkl",
-    "scaler.pkl",
-    "feature_columns.json",
+    "preprocessing_artifacts.pkl",  # Combined file instead of separate scaler/encoders
     "model_results.json"
 ]
 
@@ -68,22 +67,23 @@ def lr_model(model_files):
 
 
 @pytest.fixture
-def scaler(model_files):
-    """Load the trained scaler."""
-    if "scaler.pkl" not in model_files:
-        pytest.skip("Scaler file not found")
-
-    return joblib.load(model_files["scaler.pkl"])
+def scaler(models_dir):
+    """Load the trained scaler from combined preprocessing artifacts."""
+    try:
+        preprocessing = load_preprocessing_artifacts_combined(models_dir)
+        return preprocessing["scaler"]
+    except Exception:
+        pytest.skip("Could not load scaler from preprocessing artifacts")
 
 
 @pytest.fixture
-def feature_columns(model_files):
-    """Load the feature columns list."""
-    if "feature_columns.json" not in model_files:
-        pytest.skip("Feature columns file not found")
-
-    with open(model_files["feature_columns.json"], "r") as f:
-        return json.load(f)
+def feature_columns(models_dir):
+    """Load the feature columns list from combined preprocessing artifacts."""
+    try:
+        preprocessing = load_preprocessing_artifacts_combined(models_dir)
+        return preprocessing["feature_cols"]
+    except Exception:
+        pytest.skip("Could not load feature columns from preprocessing artifacts")
 
 
 @pytest.fixture

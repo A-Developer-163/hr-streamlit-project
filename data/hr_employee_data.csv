@@ -1,4 +1,4 @@
-Emp_Id,satisfaction_level,last_evaluation,number_project,average_montly_hours,time_spend_company,Work_accident,left,promotion_last_5years,Department,salary
+employee_id,satisfaction_level,last_evaluation,num_projects,avg_monthly_hours,years_at_company,had_work_accident,attrition,promotion_last_5_years,department,salary
 IND02438,0.38,0.53,2,157,3,0,1,0,sales,low
 IND28133,0.8,0.86,5,262,6,0,1,0,sales,medium
 IND07164,0.11,0.88,7,272,4,0,1,0,sales,medium

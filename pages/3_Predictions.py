@@ -10,7 +10,7 @@ import joblib
 import json
 import plotly.graph_objects as go
 import plotly.express as px
-from config import MODELS_DIR
+from config import MODELS_DIR, load_preprocessing_artifacts_combined
 
 st.set_page_config(page_title="Predictions", layout="wide")
 
@@ -18,21 +18,14 @@ st.set_page_config(page_title="Predictions", layout="wide")
 @st.cache_resource
 def load_preprocessing_artifacts():
     """Loading preprocessing artifacts (encoders, scalers, feature columns)."""
-    models_dir = MODELS_DIR
-
     try:
-        scaler = joblib.load(models_dir / "scaler.pkl")
-        le_dept = joblib.load(models_dir / "department_encoder.pkl")
-        le_salary = joblib.load(models_dir / "salary_encoder.pkl")
-
-        with open(models_dir / "feature_columns.json", "r") as f:
-            feature_cols = json.load(f)
-
+        artifacts = load_preprocessing_artifacts_combined()
+        # Return with same keys for backward compatibility
         return {
-            "scaler": scaler,
-            "le_dept": le_dept,
-            "le_salary": le_salary,
-            "feature_cols": feature_cols,
+            "scaler": artifacts["scaler"],
+            "le_dept": artifacts["department_encoder"],
+            "le_salary": artifacts["salary_encoder"],
+            "feature_cols": artifacts["feature_cols"],
         }
     except Exception as e:
         st.error(f"Error loading preprocessing artifacts: {e}")
@@ -191,31 +184,33 @@ with col_input:
         submitted = st.form_submit_button("Predict Attrition Risk")
 
 with col_importance:
-    # Displaying feature importance for selected model
+    # Displaying feature importance for selected model (lazy-loaded in expander)
     importance_key = model_key_map.get(selected_model.replace(" (Recommended)", ""), "random_forest")
-    feature_importance = load_feature_importance(importance_key)
-    if feature_importance is not None:
-        st.subheader(f"Feature Importance ({selected_model.replace(' (Recommended)', '')})")
-        fig_importance = px.bar(
-            feature_importance.head(5),
-            x="importance",
-            y="feature",
-            orientation="h",
-            title="Top 5 Predictive Features",
-            color="importance",
-            color_continuous_scale="Blues",
-        )
-        fig_importance.update_layout(showlegend=False, yaxis={"categoryorder": "total ascending"})
-        st.plotly_chart(fig_importance, width='stretch')
-        st.caption("These features have the strongest influence on attrition predictions.")
+    with st.expander(f"Feature Importance ({selected_model.replace(' (Recommended)', '')})"):
+        feature_importance = load_feature_importance(importance_key)
+        if feature_importance is not None:
+            fig_importance = px.bar(
+                feature_importance.head(5),
+                x="importance",
+                y="feature",
+                orientation="h",
+                title="Top 5 Predictive Features",
+                color="importance",
+                color_continuous_scale="Blues",
+            )
+            fig_importance.update_layout(showlegend=False, yaxis={"categoryorder": "total ascending"})
+            st.plotly_chart(fig_importance, width='stretch')
+            st.caption("These features have the strongest influence on attrition predictions.")
 
 # Handling prediction
 if submitted:
-    # Encoding categorical inputs
-    # Department: OneHotEncoder creates 9 binary features
-    dept_encoded = preprocessing["le_dept"].transform([[department]])[0]
-    # Salary: OrdinalEncoder creates 1 numeric feature
-    salary_encoded = preprocessing["le_salary"].transform([[salary]])[0][0]
+    # Encoding categorical inputs - use DataFrames to avoid sklearn warnings
+    dept_encoded = preprocessing["le_dept"].transform(
+        pd.DataFrame([[department]], columns=["department"])
+    )[0]
+    salary_encoded = preprocessing["le_salary"].transform(
+        pd.DataFrame([[salary]], columns=["salary"])
+    )[0][0]
 
     # Creating feature array (17 features total)
     # 7 numeric + 1 salary + 9 one-hot departments
@@ -231,7 +226,10 @@ if submitted:
             proba = model.predict_proba(features)[0]
         elif "Logistic Regression" in selected_model:
             model = load_model("logistic_regression")
-            features_scaled = preprocessing["scaler"].transform(features)
+            # Wrap in DataFrame with proper column names
+            feature_cols = preprocessing["feature_cols"]
+            features_df = pd.DataFrame([features[0]], columns=feature_cols)
+            features_scaled = preprocessing["scaler"].transform(features_df)
             proba = model.predict_proba(features_scaled)[0]
         elif "XGBoost" in selected_model:
             model = load_model("xgboost")
